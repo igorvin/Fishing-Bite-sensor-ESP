@@ -5,6 +5,9 @@ It detects bites using acceleration magnitude changes and notifies with **LEDs a
 The system includes a **web configuration UI** using **SettingsGyver**, supports **persistent settings**, and allows switching between **English / Russian** languages.
 
 ---
+<p align="center">
+  <img src="./img/Fishing Bite Sensor_en.png" width="600" alt="Fishing Bite Sensor Web EN">
+</p>
 
 ## 🧠 Features
 
