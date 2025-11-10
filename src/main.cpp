@@ -1,3 +1,17 @@
+/*******************************************************
+  Fishing Bite Sensor – ESP32-S3 (Seeed XIAO)
+  - Accelerometer: BMI160 (DFRobot_BMI160)
+  - UI/Settings:   GyverDBFile + SettingsGyver
+  - Storage:       LittleFS
+  - Features:
+      * ARMED/DISARMED (long-press button toggles)
+      * Green LED on when ARMED
+      * Red LED + short buzzer pulses on motion
+      * Long beep when ARMED, two short when DISARMED
+      * DISARMED → ultra-low-power deep sleep after grace
+      * AP SSID = Sensor Name (persistent, save+reboot)
+********************************************************/
+
 #include <Arduino.h>
 #include <Wire.h>
 #include <WiFi.h>
@@ -5,7 +19,7 @@
 
 #include <LittleFS.h>
 #include <GyverDBFile.h>
-#include <SettingsGyver.h>   // Using SettingsGyver, but applying the SettingsESP example pattern
+#include <SettingsGyver.h>   // Using SettingsGyver in the "SettingsESP pattern"
 
 // ==============================
 //            PINS (XIAO ESP32-S3)
@@ -15,15 +29,18 @@
 #define BUZZER      8
 #define BUTTON      4        // Active-LOW; if using EXT0 wake, must be RTC-capable
 
+// If your board routes I2C to specific pins, set them here.
+// Leave as -1 to let Wire use the default mapping.
 #define I2C_SDA_PIN -1
 #define I2C_SCL_PIN -1
 
 // ==============================
-//        SENSOR / ENGINE CONST
-// ==============================
+/*        SENSOR / ENGINE CONST
+   G_PER_LSB assumes ±2g range (1/16384 g/LSB typical for BMI160 at ±2g).
+*/
 const int8_t   I2C_ADDR              = 0x69;
 const float    G_PER_LSB             = 1.0f / 16384.0f;
-const uint8_t  TRIGGER_SAMPLES       = 3;
+const uint8_t  TRIGGER_SAMPLES       = 3;        // samples over threshold before "motion"
 const uint16_t LONG_PRESS_MS         = 1000;
 const uint16_t DEBOUNCE_MS           = 30;
 const uint16_t SAMPLE_INTERVAL_MS    = 10;
@@ -71,7 +88,7 @@ DB_KEYS(
   kk,
   // config & runtime
   name,          // Sensor name (ALSO AP SSID)
-  deltaG,        // Sensitivity
+  deltaG,        // Sensitivity Δg
   shortPulse,    // Short pulse, ms
   pulsePeriod,   // Pulse period, ms
   contThresh,    // Continuous threshold, ms
@@ -104,7 +121,9 @@ bool     cfg_armedSw      = false;
 
 String   cfg_apPass       = "";            // empty = open AP
 
+// ==============================
 // Small clamp helpers
+// ==============================
 static inline uint16_t clamp16(uint16_t v, uint16_t lo, uint16_t hi) {
   if (v < lo) return lo;
   if (v > hi) return hi;
@@ -119,8 +138,16 @@ static inline float clampf(float v, float lo, float hi) {
 // ==============================
 //         LOW-LEVEL HELPERS
 // ==============================
+
+/**
+ * @brief Compute vector magnitude for 3D acceleration.
+ */
 inline float mag3(float x, float y, float z) { return sqrtf(x*x + y*y + z*z); }
 
+/**
+ * @brief Begin a short alert pulse: red LED ON + buzzer tone for cfg_shortPulseMs.
+ *        Increments global alert counter.
+ */
 inline void startPulse(uint32_t now) {
   pulseOn = true;
   lastPulseStart = now;
@@ -130,18 +157,27 @@ inline void startPulse(uint32_t now) {
   g_alerts++;  // count alerts
 }
 
+/**
+ * @brief Stop the current alert pulse: buzzer off, red LED off.
+ */
 inline void stopPulse() {
   pulseOn = false;
   noTone(BUZZER);
   digitalWrite(LED_RED, LOW);
 }
 
+/**
+ * @brief Update green LED according to armed state (ON when armed).
+ */
 inline void updateGreenLED() {
   digitalWrite(LED_GREEN, armed ? HIGH : LOW);
 }
 
+/**
+ * @brief Bring up the Access Point with the given SSID/password.
+ *        Empty password → open AP.
+ */
 void configureAP(const String& ssid, const String& pass) {
-  // Bring up AP with given credentials (used at boot)
   WiFi.softAPdisconnect(true);
   delay(100);
   if (pass.length() >= 8) WiFi.softAP(ssid.c_str(), pass.c_str());
@@ -151,7 +187,10 @@ void configureAP(const String& ssid, const String& pass) {
   Serial.print("AP IP: ");       Serial.println(WiFi.softAPIP());
 }
 
-// Unified state setter to keep button & web in sync
+/**
+ * @brief Central setter for armed state (syncs UI switch + plays tones).
+ *        If disarming with deepSleepOnDisarm=true → enter deep sleep.
+ */
 void setArmed(bool v, bool deepSleepOnDisarm) {
   armed = v;
   cfg_armedSw = v;
@@ -159,25 +198,36 @@ void setArmed(bool v, bool deepSleepOnDisarm) {
   updateGreenLED();
 
   if (v) {
-    tone(BUZZER, 3000); delay(600); noTone(BUZZER);              // long beep
+    // Long beep when armed
+    tone(BUZZER, 3000); delay(600); noTone(BUZZER);
   } else {
-    tone(BUZZER, 3000); delay(150); noTone(BUZZER); delay(80);   // two short
+    // Two short beeps when disarmed
+    tone(BUZZER, 3000); delay(150); noTone(BUZZER); delay(80);
     tone(BUZZER, 3000); delay(150); noTone(BUZZER);
+
     if (deepSleepOnDisarm) {
+      // Power down outputs and go to deep sleep
       noTone(BUZZER);
       digitalWrite(LED_RED, LOW);
       digitalWrite(LED_GREEN, LOW);
       pinMode(BUTTON, INPUT_PULLUP);
+
       esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-      // Preferred: EXT0 (BUTTON must be RTC-capable). Else use EXT1 if needed.
+      // Preferred: EXT0 (BUTTON must be RTC-capable). Wake when pressed (LOW).
       esp_sleep_enable_ext0_wakeup((gpio_num_t)BUTTON, 0);
-      // Alternative if BUTTON isn't RTC-capable:
+
+      // Alternative if BUTTON is not RTC-capable on your board:
       // esp_sleep_enable_ext1_wakeup(1ULL << BUTTON, ESP_EXT1_WAKEUP_ALL_LOW);
+
       esp_deep_sleep_start();
     }
   }
 }
 
+/**
+ * @brief Enter deep sleep while DISARMED; wake on long press later.
+ *        (Used after the grace period and no AP clients.)
+ */
 void suspendUntilLongPressToArm() {
   noTone(BUZZER);
   digitalWrite(LED_RED, LOW);
@@ -186,9 +236,16 @@ void suspendUntilLongPressToArm() {
   pinMode(BUTTON, INPUT_PULLUP);
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
   esp_sleep_enable_ext0_wakeup((gpio_num_t)BUTTON, 0); // LOW wake
+
+  // Alternative if BUTTON isn't RTC-capable:
+  // esp_sleep_enable_ext1_wakeup(1ULL << BUTTON, ESP_EXT1_WAKEUP_ALL_LOW);
+
   esp_deep_sleep_start();
 }
 
+/**
+ * @brief Convenience tones.
+ */
 void beepShort() { tone(BUZZER, 3000); delay(150); noTone(BUZZER); delay(80); }
 void beepLong()  { tone(BUZZER, 3000); delay(600); noTone(BUZZER); }
 
@@ -197,6 +254,9 @@ void beepLong()  { tone(BUZZER, 3000); delay(600); noTone(BUZZER); }
 // ==============================
 bool saveReboot_f = false;
 
+/**
+ * @brief Build SettingsGyver UI: sensor tuning, Wi-Fi/AP config, and status.
+ */
 void build(sets::Builder& b) {
   using namespace sets;
 
@@ -236,7 +296,10 @@ void build(sets::Builder& b) {
   }
 }
 
-// Apply web changes → runtime + push live status
+/**
+ * @brief Persist UI changes, apply Armed switch, handle Save&Restart,
+ *        and push live status back to the UI.
+ */
 void update(sets::Updater& u) {
   // Persist sliders to DB (manual write for variable-bound sliders)
   db.set(kk::deltaG,      cfg_deltaG);
@@ -303,6 +366,10 @@ void update(sets::Updater& u) {
 // ==============================
 //         BUTTON HANDLER
 // ==============================
+
+/**
+ * @brief Debounced button handler with long-press action to toggle armed state.
+ */
 static void handleButton(uint32_t now) {
   int raw = digitalRead(BUTTON); // active-LOW
   if (raw != btnPrev && (now - btnLastChange) >= DEBOUNCE_MS) {
@@ -313,7 +380,7 @@ static void handleButton(uint32_t now) {
     else btnIsDown = false;
   }
 
-  // Long-press toggles arm/disarm (preserved)
+  // Long-press toggles arm/disarm
   if (btnIsDown && !longFired && (now - btnDownAt) >= LONG_PRESS_MS) {
     longFired = true;
     if (armed) setArmed(false, /*deepSleepOnDisarm=*/true);
@@ -334,14 +401,7 @@ void setup() {
   delay(100);
   Serial.println();
 
-  // === IMPORTANT: tell Settings current WiFi mode first (from your example) ===
-  WiFi.mode(WIFI_AP_STA);
-
-  // Start Settings BEFORE we connect WiFi (so it knows current mode)
-  sett.begin();
-  sett.onBuild(build);
-  sett.onUpdate(update);
-
+  // --- CRITICAL ORDER: mount FS + start DB BEFORE SettingsGyver ---
 #ifdef ESP32
   LittleFS.begin(true);   // format on first run
 #else
@@ -367,11 +427,19 @@ void setup() {
   cfg_armedSw      = db.get(kk::armedSw).toBool();
   cfg_apPass       = db.get(kk::apPass).toString();
 
-  // ======== WIFI AP (SSID = SENSOR NAME) ========
-  // Bring up AP now (after DB is ready and name loaded)
+  // WiFi mode first (like SettingsESP example), THEN start SettingsGyver
+  WiFi.mode(WIFI_AP_STA);
+  // Optionally set station/AP hostname to match sensor name
+  WiFi.setHostname(cfg_name.c_str());
+
+  // Start Settings AFTER FS/DB/config are ready
+  sett.begin();
+  sett.onBuild(build);
+  sett.onUpdate(update);
+
+  // Bring up the AP using the freshly loaded SSID/pass
   WiFi.softAPdisconnect(true);
   configureAP(cfg_name, cfg_apPass);
-
   Serial.print("Loaded SSID: "); Serial.println(cfg_name);
   Serial.print("AP pass: ");     Serial.println(cfg_apPass.isEmpty() ? String("<open>") : String("<hidden>"));
   Serial.print("AP IP: ");       Serial.println(WiFi.softAPIP());
@@ -388,6 +456,7 @@ void setup() {
     Serial.printf("BMI160 init OK @ 0x%02X\n", I2C_ADDR);
   }
 
+  // Establish initial baseline g magnitude
   if (imuOK) {
     float sum = 0;
     for (int i = 0; i < 50; i++) {
@@ -400,13 +469,13 @@ void setup() {
     baselineMagG = sum / 50.0f;
   }
 
-  // Initial armed state from DB
+  // Apply initial ARMED state from DB (plays tone pattern)
   setArmed(cfg_armedSw, /*deepSleepOnDisarm=*/false);
 
   Serial.println("Open http://192.168.4.1 for Settings");
   Serial.println("Default: DISARMED (hold button to arm)");
 
-  // Boot-time long-press to ARM (original UX)
+  // Boot-time long-press to ARM (quality-of-life feature)
   delay(DEBOUNCE_MS);
   if (digitalRead(BUTTON) == LOW) {
     uint32_t t0 = millis();
@@ -429,7 +498,7 @@ void setup() {
 void loop() {
   // Serve Settings UI and flush DB internals
   sett.tick();
-  //db.tick();
+  // db.tick();  // not required with SettingsGyver
 
   const uint32_t now = millis();
 
@@ -439,7 +508,9 @@ void loop() {
 
   // If DISARMED → stay awake during grace or while a client is connected; else sleep
   if (!armed) {
-    const bool clientConnected = (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) && (WiFi.softAPgetStationNum() > 0);
+    const bool clientConnected =
+      (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) &&
+      (WiFi.softAPgetStationNum() > 0);
     const bool inGrace = (now - bootMs) < CONFIG_GRACE_MS;
 
     if (!clientConnected && !inGrace) {
@@ -460,11 +531,12 @@ void loop() {
         float gz = acc[2] * G_PER_LSB;
         float mag = mag3(gx, gy, gz);
 
-        // drift tracking
+        // Slow baseline drift tracking (EWMA)
         baselineMagG = baselineMagG * 0.999f + mag * 0.001f;
         float delta = fabsf(mag - baselineMagG);
         g_lastDelta = delta;
 
+        // Trigger count filter
         if (delta >= cfg_deltaG) {
           if (consecutiveTriggers < 255) consecutiveTriggers++;
         } else if (consecutiveTriggers > 0) {
@@ -485,8 +557,10 @@ void loop() {
 
   // ---- Pulse engine ----
   if (pulseOn && (int32_t)(now - pulseOffAt) >= 0) stopPulse();
+
   if (inMotion) {
     uint32_t motionDur = now - motionStartMs;
+    // After continuous motion for cfg_contThresh, continue periodic pulses
     if (motionDur >= cfg_contThresh) {
       if (!pulseOn && (now - lastPulseStart) >= cfg_pulsePeriod) {
         startPulse(now);
