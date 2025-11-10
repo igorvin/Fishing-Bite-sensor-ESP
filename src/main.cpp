@@ -5,7 +5,7 @@
 
 #include <LittleFS.h>
 #include <GyverDBFile.h>
-#include <SettingsGyver.h>
+#include <SettingsGyver.h>   // Using SettingsGyver, but applying the SettingsESP example pattern
 
 // ==============================
 //            PINS (XIAO ESP32-S3)
@@ -13,13 +13,14 @@
 #define LED_GREEN   5
 #define LED_RED     6
 #define BUZZER      8
-#define BUTTON      4        // Active-LOW; for EXT0 wake choose an RTC-capable pin
+#define BUTTON      4        // Active-LOW; if using EXT0 wake, must be RTC-capable
 
 #define I2C_SDA_PIN -1
 #define I2C_SCL_PIN -1
 
 // ==============================
-/*        SENSOR / ENGINE CONST  */
+//        SENSOR / ENGINE CONST
+// ==============================
 const int8_t   I2C_ADDR              = 0x69;
 const float    G_PER_LSB             = 1.0f / 16384.0f;
 const uint8_t  TRIGGER_SAMPLES       = 3;
@@ -62,25 +63,23 @@ volatile uint32_t g_alerts    = 0;      // short pulse count
 // Boot timestamp (for config grace window)
 uint32_t bootMs = 0;
 
-// Reboot scheduling
-bool rebootPending = false;
-
 // ==============================
 //      SETTINGS + DATABASE
 // ==============================
 // DB keys (persistent)
 DB_KEYS(
   kk,
-  conf,
-  name,          // Sensor name (label only)
+  // config & runtime
+  name,          // Sensor name (ALSO AP SSID)
   deltaG,        // Sensitivity
   shortPulse,    // Short pulse, ms
   pulsePeriod,   // Pulse period, ms
   contThresh,    // Continuous threshold, ms
   armedSw,       // Armed switch
-  apName,        // AP SSID
+  // Wi-Fi
   apPass,        // AP password (>=8 WPA2, empty=open)
-  saveRB         // Save & Reboot button
+  // actions
+  saveRB         // Save & Restart button
 );
 
 // Live (non-DB) widget IDs (hashed)
@@ -89,19 +88,20 @@ DB_KEYS(
 #define H_alertsLbl    H(alertsLbl)
 #define H_uptimeLbl    H(uptimeLbl)
 #define H_stateLED     H(stateLED)
+#define H_accelLED     H(accelLED)
+#define H_accelLbl     H(accelLbl)
 
 GyverDBFile   db(&LittleFS, "/config.db");
 SettingsGyver sett("Fishing Bite Sensor", &db);
 
 // Runtime config (mirrors DB)
-String   cfg_name         = "BiteSensor";
+String   cfg_name         = "BiteSensor";  // ALSO used as AP SSID
 float    cfg_deltaG       = 0.15f;
 uint16_t cfg_shortPulseMs = 120;
 uint16_t cfg_pulsePeriod  = 300;
 uint16_t cfg_contThresh   = 250;
 bool     cfg_armedSw      = false;
 
-String   cfg_apName       = "BiteSensor";
 String   cfg_apPass       = "";            // empty = open AP
 
 // Small clamp helpers
@@ -141,17 +141,14 @@ inline void updateGreenLED() {
 }
 
 void configureAP(const String& ssid, const String& pass) {
-  // Restart AP with new credentials (no reboot needed)
+  // Bring up AP with given credentials (used at boot)
   WiFi.softAPdisconnect(true);
   delay(100);
-  if (pass.length() >= 8) {
-    WiFi.softAP(ssid.c_str(), pass.c_str());
-  } else {
-    WiFi.softAP(ssid.c_str(), "");   // open AP if password too short / empty
-  }
+  if (pass.length() >= 8) WiFi.softAP(ssid.c_str(), pass.c_str());
+  else                    WiFi.softAP(ssid.c_str(), "");  // open AP
   delay(200);
-  Serial.print("AP SSID: "); Serial.println(ssid);
-  Serial.print("AP IP:   "); Serial.println(WiFi.softAPIP());
+  Serial.print("AP SSID now: "); Serial.println(ssid);
+  Serial.print("AP IP: ");       Serial.println(WiFi.softAPIP());
 }
 
 // Unified state setter to keep button & web in sync
@@ -206,44 +203,50 @@ void build(sets::Builder& b) {
   {
     Group g(b, "Sensor");
 
-    b.Input(kk::name, "Sensor name");
-
-    b.Slider(kk::deltaG,     "Sensitivity Δg",          0.02, 1.00, 0.01, "",     AnyPtr(&cfg_deltaG));
-    b.Slider(kk::shortPulse, "Short pulse",             40.0, 1000.0, 10.0, "ms", AnyPtr(&cfg_shortPulseMs));
-    b.Slider(kk::pulsePeriod,"Pulse period",            100.0, 2000.0, 10.0, "ms",AnyPtr(&cfg_pulsePeriod));
-    b.Slider(kk::contThresh, "Continuous threshold",    50.0, 2000.0, 10.0, "ms", AnyPtr(&cfg_contThresh));
+    // Sliders with IDs + labels + units + AnyPtr(...)
+    b.Slider(kk::deltaG,     "Sensitivity Δg",          0.02f, 1.00f, 0.01f,  "",   AnyPtr(&cfg_deltaG));
+    b.Slider(kk::shortPulse, "Short pulse",             40.0f, 1000.0f, 10.0f, "ms", AnyPtr(&cfg_shortPulseMs));
+    b.Slider(kk::pulsePeriod,"Pulse period",            100.0f, 2000.0f, 10.0f, "ms", AnyPtr(&cfg_pulsePeriod));
+    b.Slider(kk::contThresh, "Continuous threshold",    50.0f, 2000.0f, 10.0f, "ms", AnyPtr(&cfg_contThresh));
 
     b.Switch(kk::armedSw, "Armed (web toggle)");
   }
 
   {
     Group g(b, "Wireless settings");
-    b.Input(kk::apName, "AP name (SSID)");
+    // Sensor name (ALSO AP SSID)
+    b.Input(kk::name, "Sensor name (also AP SSID)");
     b.Pass( kk::apPass, "AP password (Min 8 chars)");
-    if (b.Button(kk::saveRB, "Save & Reboot")) saveReboot_f = true;
+
+    // Button → handled in update() with db.update() + ESP.restart()
+    if (b.Button(kk::saveRB, "Save & Restart")) saveReboot_f = true;
   }
 
   {
-    Group g(b, "Status");
-    b.LED(H_stateLED);
-    b.Label(H_stateLbl, "State");
-    b.Label(H_deltaLbl, "Δg");
+    Group g(b, "Status");           // live (non-DB) widgets
+    b.LED(  H_stateLED);
+    b.Label(H_stateLbl,  "State");
+
+    b.LED(  H_accelLED);
+    b.Label(H_accelLbl,  "Accelerometer");
+
+    b.Label(H_deltaLbl,  "Δg");
     b.Label(H_alertsLbl, "Alerts");
     b.Label(H_uptimeLbl, "Uptime (s)");
   }
 }
 
-
 // Apply web changes → runtime + push live status
 void update(sets::Updater& u) {
-  // Persist sliders to DB (manual save for variable-bound sliders)
+  // Persist sliders to DB (manual write for variable-bound sliders)
   db.set(kk::deltaG,      cfg_deltaG);
   db.set(kk::shortPulse,  (int)cfg_shortPulseMs);
   db.set(kk::pulsePeriod, (int)cfg_pulsePeriod);
   db.set(kk::contThresh,  (int)cfg_contThresh);
 
-  // Read DB-backed toggle
+  // Read DB-backed toggles and name (Inputs write to DB automatically)
   if (auto e = db.get(kk::armedSw)) cfg_armedSw = e.toBool();
+  if (auto e = db.get(kk::name))    cfg_name    = e.toString();
 
   // Sanitize sliders
   cfg_deltaG       = clampf(cfg_deltaG, 0.02f, 1.0f);
@@ -256,38 +259,45 @@ void update(sets::Updater& u) {
     setArmed(cfg_armedSw, /*deepSleepOnDisarm=*/!cfg_armedSw);
   }
 
-  // Handle "Save & Reboot" (apply AP settings atomically and restart)
+  // ===== Save & Restart (apply name=SSID and password) with IMMEDIATE DB FLUSH =====
   if (saveReboot_f) {
     saveReboot_f = false;
 
-    String newApName = cfg_apName;
-    String newApPass = cfg_apPass;
-    if (auto e = db.get(kk::apName)) newApName = e.toString();
-    if (auto e = db.get(kk::apPass)) newApPass = e.toString();
+    // The latest text inputs are already in DB (because Input widgets write there)
+    String newName = db.get(kk::name).toString();
+    String newPass = db.get(kk::apPass).toString();
+    newName.trim();
 
-    // Validate password (>=8 or empty)
-    if (!newApPass.isEmpty() && newApPass.length() < 8) {
+    // Validate SSID (name) & password
+    if (newName.length() == 0 || newName.length() > 32) {
+      u.alert("Sensor name / SSID must be 1..32 characters.");
+    } else if (!newPass.isEmpty() && newPass.length() < 8) {
       u.alert("Password must be at least 8 characters or empty (open AP).");
     } else {
-      // Save to DB (already saved by inputs, but ensure final values)
-      db.set(kk::apName, newApName);
-      db.set(kk::apPass, newApPass);
+      // Optionally normalize name (e.g., remove CR/LF)
+      db.set(kk::name, newName);
+      db.set(kk::apPass, newPass);
 
-      // Notify user and schedule reboot (do not reconfigure live)
-      u.notice("Saving wireless settings... Rebooting now.");
-      // Update runtime mirror so after reboot we start with these
-      cfg_apName = newApName;
-      cfg_apPass = newApPass;
-      rebootPending = true;
+      // Force-flush DB NOW (critical to persist before restart)
+      db.update();
+
+      // Optional: show notice; then restart
+      u.notice("Saved. Rebooting to apply AP SSID/password...");
+      ESP.restart();
     }
   }
 
-  // ---- live status to UI (safe String casting per docs warning) ----
+  // ---- live status to UI ----
   u.update(H_stateLbl,  armed ? String("ARMED") : String("DISARMED"));
+  u.updateColor(H_stateLED, armed ? sets::Colors::Aqua : sets::Colors::Pink);
+
+  // Accelerometer init state LED + label
+  u.update(H_accelLbl, imuOK ? String("OK") : String("ERROR"));
+  u.updateColor(H_accelLED, imuOK ? sets::Colors::Green : sets::Colors::Red);
+
   u.update(H_deltaLbl,  String(g_lastDelta, 3));
   u.update(H_alertsLbl, (int)g_alerts);
   u.update(H_uptimeLbl, (uint32_t)(millis() / 1000));
-  u.updateColor(H_stateLED, armed ? sets::Colors::Aqua : sets::Colors::Pink);
 }
 
 // ==============================
@@ -303,7 +313,7 @@ static void handleButton(uint32_t now) {
     else btnIsDown = false;
   }
 
-  // Long-press keeps previous behavior 1:1
+  // Long-press toggles arm/disarm (preserved)
   if (btnIsDown && !longFired && (now - btnDownAt) >= LONG_PRESS_MS) {
     longFired = true;
     if (armed) setArmed(false, /*deepSleepOnDisarm=*/true);
@@ -324,6 +334,14 @@ void setup() {
   delay(100);
   Serial.println();
 
+  // === IMPORTANT: tell Settings current WiFi mode first (from your example) ===
+  WiFi.mode(WIFI_AP_STA);
+
+  // Start Settings BEFORE we connect WiFi (so it knows current mode)
+  sett.begin();
+  sett.onBuild(build);
+  sett.onUpdate(update);
+
 #ifdef ESP32
   LittleFS.begin(true);   // format on first run
 #else
@@ -331,14 +349,13 @@ void setup() {
 #endif
   db.begin();
 
-    // Initialize defaults (first run only)
+  // Initialize defaults (first run only)
   db.init(kk::name,        cfg_name);
   db.init(kk::deltaG,      cfg_deltaG);
   db.init(kk::shortPulse,  (int)cfg_shortPulseMs);
   db.init(kk::pulsePeriod, (int)cfg_pulsePeriod);
   db.init(kk::contThresh,  (int)cfg_contThresh);
   db.init(kk::armedSw,     false);
-  db.init(kk::apName,      cfg_apName);
   db.init(kk::apPass,      cfg_apPass);
 
   // Load persisted config fresh from database (always latest)
@@ -348,18 +365,16 @@ void setup() {
   cfg_pulsePeriod  = db.get(kk::pulsePeriod).toInt();
   cfg_contThresh   = db.get(kk::contThresh).toInt();
   cfg_armedSw      = db.get(kk::armedSw).toBool();
-  cfg_apName       = db.get(kk::apName).toString();
   cfg_apPass       = db.get(kk::apPass).toString();
 
-  // ======== WIFI AP ========
-  WiFi.mode(WIFI_AP);
-  configureAP(cfg_apName, cfg_apPass);
+  // ======== WIFI AP (SSID = SENSOR NAME) ========
+  // Bring up AP now (after DB is ready and name loaded)
+  WiFi.softAPdisconnect(true);
+  configureAP(cfg_name, cfg_apPass);
 
-
-  // ======== SETTINGS WEB ========
-  sett.begin();
-  sett.onBuild(build);
-  sett.onUpdate(update);
+  Serial.print("Loaded SSID: "); Serial.println(cfg_name);
+  Serial.print("AP pass: ");     Serial.println(cfg_apPass.isEmpty() ? String("<open>") : String("<hidden>"));
+  Serial.print("AP IP: ");       Serial.println(WiFi.softAPIP());
 
   // ======== I2C + BMI160 ========
   if (I2C_SDA_PIN >= 0 && I2C_SCL_PIN >= 0) Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
@@ -412,15 +427,9 @@ void setup() {
 //              LOOP
 // ==============================
 void loop() {
-  // Serve Settings UI and flush DB
+  // Serve Settings UI and flush DB internals
   sett.tick();
-  db.tick();
-
-  // If a reboot was requested from the UI, do it now (after updates are sent)
-  if (rebootPending) {
-    delay(300);
-    ESP.restart();
-  }
+  //db.tick();
 
   const uint32_t now = millis();
 
@@ -430,7 +439,7 @@ void loop() {
 
   // If DISARMED → stay awake during grace or while a client is connected; else sleep
   if (!armed) {
-    const bool clientConnected = (WiFi.getMode() == WIFI_AP) && (WiFi.softAPgetStationNum() > 0);
+    const bool clientConnected = (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) && (WiFi.softAPgetStationNum() > 0);
     const bool inGrace = (now - bootMs) < CONFIG_GRACE_MS;
 
     if (!clientConnected && !inGrace) {
