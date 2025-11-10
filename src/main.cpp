@@ -17,7 +17,7 @@
 #include <Wire.h>
 #include <WiFi.h>
 
-// --- fix BMI160 endian redefinition warning ---
+// --- fix BMI160 endian redefinition warning (esp32 toolchain defines it) ---
 #ifdef LITTLE_ENDIAN
   #undef LITTLE_ENDIAN
 #endif
@@ -72,7 +72,7 @@ volatile uint32_t g_alerts    = 0;
 DB_KEYS(
   kk,
   name, deltaG, shortPulse, pulsePeriod, contThresh,
-  armedSw, langRu, apPass, saveRB
+  armedSw, langIdx, langRu, apPass, saveRB   // keep legacy bool langRu for one-time migration
 );
 
 // UI holders (LEDs/labels)
@@ -85,7 +85,7 @@ DB_KEYS(
 #define H_accelLbl    H(accelLbl)
 #define H_langLED     H(langLED)
 #define H_langLbl     H(langLbl)
-#define H_langHintLbl H(langHintLbl)   // <— static hint label (instead of Note)
+#define H_langHintLbl H(langHintLbl)   // static hint label
 
 GyverDBFile   db(&LittleFS, "/config.db");
 SettingsGyver sett("Fishing Bite Sensor", &db);
@@ -133,7 +133,12 @@ const LangPack LANG_RU = {
 String   cfg_name="BiteSensor", cfg_apPass="";
 float    cfg_deltaG=0.15f;
 uint16_t cfg_shortPulseMs=120, cfg_pulsePeriod=300, cfg_contThresh=250;
-bool     cfg_armedSw=false, cfg_langRu=false;
+bool     cfg_armedSw=false;
+
+// Language control
+int      cfg_langIdx=0;      // 0=EN, 1=RU (bound directly to Select)
+bool     cfg_langRu=false;   // helper derived from cfg_langIdx
+int      g_prevLangIdx=-1;   // tracks last applied selection
 
 inline const LangPack& L(){ return cfg_langRu?LANG_RU:LANG_EN; }
 
@@ -213,7 +218,7 @@ void suspendUntilLongPressToArm(){
 // ==============================
 // SETTINGS UI
 // ==============================
-bool saveReboot_f=false, langSeenThisUpdate=false;
+bool saveReboot_f=false;
 
 void build(sets::Builder& b){
   using namespace sets;
@@ -221,9 +226,9 @@ void build(sets::Builder& b){
   // --- General group with dropdown ---
   {
     Group g(b,L().grpGeneral);
-    int langIdx = cfg_langRu ? 1 : 0;                 // 0=EN, 1=RU
-    b.Select(kk::langRu, L().lblLanguage, "English\nРусский", AnyPtr(&langIdx));
-    b.Label(H_langHintLbl, L().langHint);             // <— static text instead of Note()
+    // Bind Select directly to the global variable (no local temp)
+    b.Select(kk::langIdx, L().lblLanguage, "English\nРусский", AnyPtr(&cfg_langIdx));
+    b.Label(H_langHintLbl, L().langHint);
   }
 
   // --- Sensor group ---
@@ -249,7 +254,7 @@ void build(sets::Builder& b){
     Group g(b,L().grpStatus);
     b.LED  (H_stateLED);  b.Label(H_stateLbl,  L().lblState);
     b.LED  (H_accelLED);  b.Label(H_accelLbl,  L().lblAccel);
-    b.LED  (H_langLED);   b.Label(H_langLbl,   L().lblLanguage); // language badge
+    b.LED  (H_langLED);   b.Label(H_langLbl,   L().lblLanguage);   // language badge
     b.Label(H_deltaLbl,   L().lblDeltaG);
     b.Label(H_alertsLbl,  L().lblAlerts);
     b.Label(H_uptimeLbl,  L().lblUptime);
@@ -266,14 +271,15 @@ void update(sets::Updater& u){
   // Armed switch
   if (auto e=db.get(kk::armedSw)) cfg_armedSw=e.toBool();
 
-  // Language from dropdown (0/1 stored in DB). Any non-zero means RU.
-  bool langPrev = cfg_langRu;
-  if (auto e = db.get(kk::langRu)) {
-    cfg_langRu = (e.toInt() != 0);   // 0 = EN, 1 = RU
-  }
-  if (cfg_langRu != langPrev && !langSeenThisUpdate) {
-    langSeenThisUpdate = true;
-    u.notice(L().msgLangChanged);
+  // Language index change detection from bound variable (not via DB in same tick)
+  if (cfg_langIdx != g_prevLangIdx) {
+    g_prevLangIdx = cfg_langIdx;
+    cfg_langRu = (cfg_langIdx == 1);
+    db.set(kk::langIdx, cfg_langIdx);     // persist after flip
+    u.notice(L().msgLangChanged);         // will show in the *new* language
+  } else {
+    // keep helper in sync even if not changed this tick
+    cfg_langRu = (cfg_langIdx == 1);
   }
 
   // Name/SSID/pass
@@ -363,8 +369,14 @@ void setup(){
   db.init(kk::pulsePeriod,(int)cfg_pulsePeriod);
   db.init(kk::contThresh,(int)cfg_contThresh);
   db.init(kk::armedSw, false);
-  db.init(kk::langRu,  cfg_langRu);
+  db.init(kk::langIdx, cfg_langIdx);   // new int index (0=EN,1=RU)
   db.init(kk::apPass,  cfg_apPass);
+
+  // ---- One-time migration from old bool key 'langRu' if present ----
+  if (auto e = db.get(kk::langRu)) {
+    bool legacyRu = e.toBool();
+    db.set(kk::langIdx, legacyRu ? 1 : 0);
+  }
 
   // Load persisted
   cfg_name         = db.get(kk::name).toString();
@@ -373,8 +385,12 @@ void setup(){
   cfg_pulsePeriod  = db.get(kk::pulsePeriod).toInt();
   cfg_contThresh   = db.get(kk::contThresh).toInt();
   cfg_armedSw      = db.get(kk::armedSw).toBool();
-  cfg_langRu       = db.get(kk::langRu).toBool();
+  cfg_langIdx      = db.get(kk::langIdx).toInt();
+  cfg_langRu       = (cfg_langIdx == 1);
   cfg_apPass       = db.get(kk::apPass).toString();
+
+  // Track initial lang idx to detect changes on first update tick
+  g_prevLangIdx = cfg_langIdx;
 
   // Wi-Fi + Settings UI
   WiFi.mode(WIFI_AP_STA);
@@ -421,7 +437,7 @@ void loop(){
   handleButton(now);
   updateGreenLED();
 
-  // Disarmed: keep AP for grace or when client connected, then deep sleep
+  // Disarmed: keep AP for grace or while client connected, then deep sleep
   if (!armed){
     bool clientConnected = (WiFi.softAPgetStationNum()>0);
     bool inGrace = (now - bootMs) < CONFIG_GRACE_MS;
