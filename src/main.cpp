@@ -28,7 +28,7 @@ const uint16_t LONG_PRESS_MS         = 1000;
 const uint16_t DEBOUNCE_MS           = 30;
 const uint16_t SAMPLE_INTERVAL_MS    = 10;
 
-// Config portal behavior on boot (grace time to open web UI before sleep)
+// Keep AP alive on boot while DISARMED so UI can load
 const uint32_t CONFIG_GRACE_MS       = 3UL * 60UL * 1000UL;  // 3 minutes
 
 // ==============================
@@ -66,16 +66,18 @@ uint32_t bootMs = 0;
 // ==============================
 //      SETTINGS + DATABASE
 // ==============================
-// Define keys namespace "kk" for DB-backed widgets
+// DB keys (persistent)
 DB_KEYS(
   kk,
   conf,
-  name,
-  deltaG,
-  shortPulse,
-  pulsePeriod,
-  contThresh,
-  armedSw
+  name,          // Sensor name (label only)
+  deltaG,        // Sensitivity
+  shortPulse,    // Short pulse, ms
+  pulsePeriod,   // Pulse period, ms
+  contThresh,    // Continuous threshold, ms
+  armedSw,       // Armed switch
+  apName,        // AP SSID
+  apPass         // AP password (>=8 WPA2, empty=open)
 );
 
 // Live (non-DB) widget IDs (hashed)
@@ -94,7 +96,10 @@ float    cfg_deltaG       = 0.15f;
 uint16_t cfg_shortPulseMs = 120;
 uint16_t cfg_pulsePeriod  = 300;
 uint16_t cfg_contThresh   = 250;
-bool     cfg_armedSw      = false;   // UI toggle mirrors physical state
+bool     cfg_armedSw      = false;
+
+String   cfg_apName       = "BiteSensor";
+String   cfg_apPass       = "";            // empty = open AP
 
 // Small clamp helpers
 static inline uint16_t clamp16(uint16_t v, uint16_t lo, uint16_t hi) {
@@ -130,6 +135,20 @@ inline void stopPulse() {
 
 inline void updateGreenLED() {
   digitalWrite(LED_GREEN, armed ? HIGH : LOW);
+}
+
+void configureAP(const String& ssid, const String& pass) {
+  // Restart AP with new credentials (no reboot needed)
+  WiFi.softAPdisconnect(true);
+  delay(100);
+  if (pass.length() >= 8) {
+    WiFi.softAP(ssid.c_str(), pass.c_str());
+  } else {
+    WiFi.softAP(ssid.c_str(), "");   // open AP if password too short / empty
+  }
+  delay(200);
+  Serial.print("AP SSID: "); Serial.println(ssid);
+  Serial.print("AP IP:   "); Serial.println(WiFi.softAPIP());
 }
 
 // Unified state setter to keep button & web in sync
@@ -181,12 +200,24 @@ void build(sets::Builder& b) {
 
   {
     Group g(b, "Sensor");
-    b.Input( kk::name,       "Name");
-    b.Number(kk::deltaG,     "Sensitivity Δg (0.02..1.0)");
-    b.Number(kk::shortPulse, "Short pulse (ms)");
-    b.Number(kk::pulsePeriod,"Pulse period (ms)");
-    b.Number(kk::contThresh, "Continuous threshold (ms)");
-    b.Switch(kk::armedSw,    "Armed (web toggle)");
+
+    // Label-only name from DB (edit in Wireless if you want AP name)
+    b.Input(kk::name, "Name");
+
+    // Sliders (variable-bound), persisted manually in update()
+    b.Slider("", 0.02, 1.00, 0.01, "Δg", &cfg_deltaG);
+    b.Slider("", 40,   1000, 10,   "ms", &cfg_shortPulseMs);
+    b.Slider("", 100,  2000, 10,   "ms", &cfg_pulsePeriod);
+    b.Slider("", 50,   2000, 10,   "ms", &cfg_contThresh);
+
+    // Armed switch (DB-backed)
+    b.Switch(kk::armedSw, "Armed (web toggle)");
+  }
+
+  {
+    Group g(b, "Wireless settings");
+    b.Input(kk::apName, "AP name (SSID)");
+    b.Pass( kk::apPass, "AP password (>=8 chars;)");
   }
 
   {
@@ -201,23 +232,36 @@ void build(sets::Builder& b) {
 
 // Apply web changes → runtime + push live status
 void update(sets::Updater& u) {
-  // Pull the latest from DB (Entry → toXxx())
-  if (auto e = db.get(kk::name))        cfg_name         = e.toString();
-  if (auto e = db.get(kk::deltaG))      cfg_deltaG       = (float)e.toFloat();
-  if (auto e = db.get(kk::shortPulse))  cfg_shortPulseMs = (uint16_t)e.toInt();
-  if (auto e = db.get(kk::pulsePeriod)) cfg_pulsePeriod  = (uint16_t)e.toInt();
-  if (auto e = db.get(kk::contThresh))  cfg_contThresh   = (uint16_t)e.toInt();
-  if (auto e = db.get(kk::armedSw))     cfg_armedSw      = e.toBool();
+  // Persist sliders to DB (manual save for variable-bound sliders)
+  db.set(kk::deltaG,      cfg_deltaG);
+  db.set(kk::shortPulse,  (int)cfg_shortPulseMs);
+  db.set(kk::pulsePeriod, (int)cfg_pulsePeriod);
+  db.set(kk::contThresh,  (int)cfg_contThresh);
 
-  // Sanitize
+  // Read DB-backed toggles & wireless
+  if (auto e = db.get(kk::armedSw)) cfg_armedSw = e.toBool();
+
+  String newApName = cfg_apName;
+  String newApPass = cfg_apPass;
+  if (auto e = db.get(kk::apName)) newApName = e.toString();
+  if (auto e = db.get(kk::apPass)) newApPass = e.toString();
+
+  // Sanitize sliders
   cfg_deltaG       = clampf(cfg_deltaG, 0.02f, 1.0f);
   cfg_shortPulseMs = clamp16(cfg_shortPulseMs, 40, 1000);
   cfg_pulsePeriod  = clamp16(cfg_pulsePeriod,  100, 2000);
   cfg_contThresh   = clamp16(cfg_contThresh,   50, 2000);
 
-  // If user toggled armed via web, reflect exactly like button:
+  // Apply armed switch
   if (cfg_armedSw != armed) {
     setArmed(cfg_armedSw, /*deepSleepOnDisarm=*/!cfg_armedSw);
+  }
+
+  // Apply AP changes live (restart AP if SSID/pass changed)
+  if (newApName != cfg_apName || newApPass != cfg_apPass) {
+    cfg_apName = newApName;
+    cfg_apPass = newApPass;
+    configureAP(cfg_apName, cfg_apPass);
   }
 
   // ---- live status to UI (safe String casting per docs warning) ----
@@ -272,10 +316,12 @@ void setup() {
   // Initialize defaults (first run only)
   db.init(kk::name,        cfg_name);
   db.init(kk::deltaG,      cfg_deltaG);
-  db.init(kk::shortPulse,  cfg_shortPulseMs);
-  db.init(kk::pulsePeriod, cfg_pulsePeriod);
-  db.init(kk::contThresh,  cfg_contThresh);
+  db.init(kk::shortPulse,  (int)cfg_shortPulseMs);
+  db.init(kk::pulsePeriod, (int)cfg_pulsePeriod);
+  db.init(kk::contThresh,  (int)cfg_contThresh);
   db.init(kk::armedSw,     false);
+  db.init(kk::apName,      cfg_apName);
+  db.init(kk::apPass,      cfg_apPass);
 
   // Load persisted config to RAM
   if (auto e = db.get(kk::name))        cfg_name         = e.toString();
@@ -284,16 +330,12 @@ void setup() {
   if (auto e = db.get(kk::pulsePeriod)) cfg_pulsePeriod  = (uint16_t)e.toInt();
   if (auto e = db.get(kk::contThresh))  cfg_contThresh   = (uint16_t)e.toInt();
   if (auto e = db.get(kk::armedSw))     cfg_armedSw      = e.toBool();
+  if (auto e = db.get(kk::apName))      cfg_apName       = e.toString();
+  if (auto e = db.get(kk::apPass))      cfg_apPass       = e.toString();
 
   // ======== WIFI AP ========
-  uint8_t mac[6]; WiFi.macAddress(mac);
-  char ssid[40];
-  snprintf(ssid, sizeof(ssid), "%s-%02X%02X", cfg_name.c_str(), mac[4], mac[5]);
   WiFi.mode(WIFI_AP);
-  WiFi.softAP(ssid, "12345678");   // open AP; set a password if desired
-  delay(300);
-  Serial.print("AP SSID: "); Serial.println(ssid);
-  Serial.print("AP IP:   "); Serial.println(WiFi.softAPIP());
+  configureAP(cfg_apName, cfg_apPass);
 
   // ======== SETTINGS WEB ========
   sett.begin();
