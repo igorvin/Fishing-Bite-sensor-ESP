@@ -8,6 +8,9 @@ The system includes a **web configuration UI** using **SettingsGyver**, supports
 <p align="center">
   <img src="./img/Fishing Bite Sensor_en.png" width="200" alt="Fishing Bite Sensor Web EN">
 </p>
+<p align="center">
+  <img src="./img/Fishing Bite Sensor_en 2.png" width="200" alt="Fishing Bite Sensor Web EN">
+</p>
 
 ## 🧠 Features
 
