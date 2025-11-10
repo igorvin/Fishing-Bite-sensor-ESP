@@ -16,7 +16,13 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <WiFi.h>
+
+// --- fix BMI160 endian redefinition warning ---
+#ifdef LITTLE_ENDIAN
+  #undef LITTLE_ENDIAN
+#endif
 #include <DFRobot_BMI160.h>
+
 #include <LittleFS.h>
 #include <GyverDBFile.h>
 #include <SettingsGyver.h>
@@ -69,13 +75,17 @@ DB_KEYS(
   armedSw, langRu, apPass, saveRB
 );
 
-#define H_stateLbl  H(stateLbl)
-#define H_deltaLbl  H(deltaLbl)
-#define H_alertsLbl H(alertsLbl)
-#define H_uptimeLbl H(uptimeLbl)
-#define H_stateLED  H(stateLED)
-#define H_accelLED  H(accelLED)
-#define H_accelLbl  H(accelLbl)
+// UI holders (LEDs/labels)
+#define H_stateLbl    H(stateLbl)
+#define H_deltaLbl    H(deltaLbl)
+#define H_alertsLbl   H(alertsLbl)
+#define H_uptimeLbl   H(uptimeLbl)
+#define H_stateLED    H(stateLED)
+#define H_accelLED    H(accelLED)
+#define H_accelLbl    H(accelLbl)
+#define H_langLED     H(langLED)
+#define H_langLbl     H(langLbl)
+#define H_langHintLbl H(langHintLbl)   // <— static hint label (instead of Note)
 
 GyverDBFile   db(&LittleFS, "/config.db");
 SettingsGyver sett("Fishing Bite Sensor", &db);
@@ -121,11 +131,33 @@ const LangPack LANG_RU = {
 };
 
 String   cfg_name="BiteSensor", cfg_apPass="";
-float    cfg_deltaG=0.15f; 
+float    cfg_deltaG=0.15f;
 uint16_t cfg_shortPulseMs=120, cfg_pulsePeriod=300, cfg_contThresh=250;
 bool     cfg_armedSw=false, cfg_langRu=false;
 
 inline const LangPack& L(){ return cfg_langRu?LANG_RU:LANG_EN; }
+
+// ==============================
+// BUZZER HELPERS (ESP32-S3 safe)
+// ==============================
+#ifdef ESP32
+  #ifndef BUZZER_LEDC_CH
+    #define BUZZER_LEDC_CH 0
+  #endif
+  void buzzerInit() {
+    ledcAttachPin(BUZZER, BUZZER_LEDC_CH);
+    ledcWriteTone(BUZZER_LEDC_CH, 0);
+  }
+  inline void buzzStart(uint32_t fHz){ ledcWriteTone(BUZZER_LEDC_CH, fHz); }
+  inline void buzzStop(){ ledcWriteTone(BUZZER_LEDC_CH, 0); }
+#else
+  void buzzerInit() {}
+  inline void buzzStart(uint32_t fHz){ tone(BUZZER, fHz); }
+  inline void buzzStop(){ noTone(BUZZER); }
+#endif
+
+inline void longBeep(){ buzzStart(3000); delay(600); buzzStop(); }
+inline void shortBeep(){ buzzStart(3000); delay(150); buzzStop(); }
 
 // ==============================
 // HELPERS
@@ -135,10 +167,11 @@ static inline uint16_t clamp16(uint16_t v,uint16_t lo,uint16_t hi){return v<lo?l
 static inline float clampf(float v,float lo,float hi){return v<lo?lo:(v>hi?hi:v);}
 
 inline void startPulse(uint32_t now){
+  (void)now;
   pulseOn=true; lastPulseStart=now; pulseOffAt=now+cfg_shortPulseMs;
-  digitalWrite(LED_RED,HIGH); tone(BUZZER,3000); g_alerts++;
+  digitalWrite(LED_RED,HIGH); buzzStart(3000); g_alerts++;
 }
-inline void stopPulse(){pulseOn=false; noTone(BUZZER); digitalWrite(LED_RED,LOW);}
+inline void stopPulse(){pulseOn=false; buzzStop(); digitalWrite(LED_RED,LOW);}
 inline void updateGreenLED(){digitalWrite(LED_GREEN,armed?HIGH:LOW);}
 
 void configureAP(const String& ssid,const String& pass){
@@ -155,10 +188,9 @@ void configureAP(const String& ssid,const String& pass){
 // ==============================
 void setArmed(bool v,bool deepSleep){
   armed=v; cfg_armedSw=v; db.set(kk::armedSw,v); updateGreenLED();
-  if(v){ tone(BUZZER,3000); delay(600); noTone(BUZZER);}
+  if(v){ longBeep(); }
   else{
-    tone(BUZZER,3000); delay(150); noTone(BUZZER); delay(80);
-    tone(BUZZER,3000); delay(150); noTone(BUZZER);
+    shortBeep(); delay(80); shortBeep();
     if(deepSleep){
       digitalWrite(LED_RED,LOW); digitalWrite(LED_GREEN,LOW);
       pinMode(BUTTON,INPUT_PULLUP);
@@ -185,11 +217,13 @@ bool saveReboot_f=false, langSeenThisUpdate=false;
 
 void build(sets::Builder& b){
   using namespace sets;
+
   // --- General group with dropdown ---
   {
     Group g(b,L().grpGeneral);
     int langIdx = cfg_langRu ? 1 : 0;                 // 0=EN, 1=RU
     b.Select(kk::langRu, L().lblLanguage, "English\nРусский", AnyPtr(&langIdx));
+    b.Label(H_langHintLbl, L().langHint);             // <— static text instead of Note()
   }
 
   // --- Sensor group ---
@@ -215,6 +249,7 @@ void build(sets::Builder& b){
     Group g(b,L().grpStatus);
     b.LED  (H_stateLED);  b.Label(H_stateLbl,  L().lblState);
     b.LED  (H_accelLED);  b.Label(H_accelLbl,  L().lblAccel);
+    b.LED  (H_langLED);   b.Label(H_langLbl,   L().lblLanguage); // language badge
     b.Label(H_deltaLbl,   L().lblDeltaG);
     b.Label(H_alertsLbl,  L().lblAlerts);
     b.Label(H_uptimeLbl,  L().lblUptime);
@@ -233,17 +268,17 @@ void update(sets::Updater& u){
 
   // Language from dropdown (0/1 stored in DB). Any non-zero means RU.
   bool langPrev = cfg_langRu;
-if (auto e = db.get(kk::langRu)) {
-  cfg_langRu = (e.toInt() != 0);   // 0 = EN, 1 = RU
-}
-if (cfg_langRu != langPrev && !langSeenThisUpdate) {
-  langSeenThisUpdate = true;
-  u.notice(L().msgLangChanged);
-}
+  if (auto e = db.get(kk::langRu)) {
+    cfg_langRu = (e.toInt() != 0);   // 0 = EN, 1 = RU
+  }
+  if (cfg_langRu != langPrev && !langSeenThisUpdate) {
+    langSeenThisUpdate = true;
+    u.notice(L().msgLangChanged);
+  }
 
-
-  // Name/SSID
-  if (auto e=db.get(kk::name)) cfg_name=e.toString();
+  // Name/SSID/pass
+  if (auto e=db.get(kk::name))   cfg_name = e.toString();
+  if (auto e=db.get(kk::apPass)) cfg_apPass = e.toString();
 
   // Sanitize
   cfg_deltaG       = clampf(cfg_deltaG, 0.02f, 1.0f);
@@ -271,12 +306,16 @@ if (cfg_langRu != langPrev && !langSeenThisUpdate) {
     }
   }
 
-  // Live labels
+  // Live status labels/LEDs
   u.update(H_stateLbl,  armed ? String(L().valArmed) : String(L().valDisarmed));
   u.updateColor(H_stateLED, armed ? sets::Colors::Aqua : sets::Colors::Pink);
 
   u.update(H_accelLbl, imuOK ? String(L().valAccelOK) : String(L().valAccelErr));
   u.updateColor(H_accelLED, imuOK ? sets::Colors::Green : sets::Colors::Red);
+
+  // language badge in Status
+  u.update(H_langLbl, cfg_langRu ? String("Русский") : String("English"));
+  u.updateColor(H_langLED, cfg_langRu ? sets::Colors::Yellow : sets::Colors::Blue);
 
   u.update(H_deltaLbl,  String(g_lastDelta, 3));
   u.update(H_alertsLbl, (int)g_alerts);
@@ -306,6 +345,8 @@ static void handleButton(uint32_t now){
 void setup(){
   pinMode(LED_GREEN,OUTPUT); pinMode(LED_RED,OUTPUT);
   pinMode(BUZZER,OUTPUT);   pinMode(BUTTON,INPUT_PULLUP);
+  buzzerInit();
+
   Serial.begin(115200); delay(100);
 
 #ifdef ESP32
