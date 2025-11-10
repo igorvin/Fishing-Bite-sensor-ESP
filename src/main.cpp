@@ -28,6 +28,9 @@ const uint16_t LONG_PRESS_MS         = 1000;
 const uint16_t DEBOUNCE_MS           = 30;
 const uint16_t SAMPLE_INTERVAL_MS    = 10;
 
+// Config portal behavior on boot (grace time to open web UI before sleep)
+const uint32_t CONFIG_GRACE_MS       = 3UL * 60UL * 1000UL;  // 3 minutes
+
 // ==============================
 //             STATE
 // ==============================
@@ -56,6 +59,9 @@ bool     longFired = false;
 // Live telemetry
 volatile float    g_lastDelta = 0.0f;   // last |mag - baseline|
 volatile uint32_t g_alerts    = 0;      // short pulse count
+
+// Boot timestamp (for config grace window)
+uint32_t bootMs = 0;
 
 // ==============================
 //      SETTINGS + DATABASE
@@ -284,7 +290,7 @@ void setup() {
   char ssid[40];
   snprintf(ssid, sizeof(ssid), "%s-%02X%02X", cfg_name.c_str(), mac[4], mac[5]);
   WiFi.mode(WIFI_AP);
-  WiFi.softAP(ssid, "");   // open AP; set a password if desired
+  WiFi.softAP(ssid, "12345678");   // open AP; set a password if desired
   delay(300);
   Serial.print("AP SSID: "); Serial.println(ssid);
   Serial.print("AP IP:   "); Serial.println(WiFi.softAPIP());
@@ -323,22 +329,22 @@ void setup() {
 
   Serial.println("Open http://192.168.4.1 for Settings");
   Serial.println("Default: DISARMED (hold button to arm)");
-  delay(DEBOUNCE_MS);
 
   // Boot-time long-press to ARM (original UX)
+  delay(DEBOUNCE_MS);
   if (digitalRead(BUTTON) == LOW) {
     uint32_t t0 = millis();
     while (digitalRead(BUTTON) == LOW) {
       if (millis() - t0 >= LONG_PRESS_MS) {
         setArmed(true, /*deepSleepOnDisarm=*/false);
-        return;
+        break;
       }
       delay(5);
     }
   }
 
-  // If still disarmed -> suspend until long press
-  if (!armed) suspendUntilLongPressToArm();
+  // Start config-grace timer (do not sleep at the end of setup)
+  bootMs = millis();
 }
 
 // ==============================
@@ -355,9 +361,18 @@ void loop() {
   handleButton(now);
   updateGreenLED();
 
-  if (!armed) return;
+  // If DISARMED → stay awake during grace or while a client is connected; else sleep
+  if (!armed) {
+    const bool clientConnected = (WiFi.getMode() == WIFI_AP) && (WiFi.softAPgetStationNum() > 0);
+    const bool inGrace = (now - bootMs) < CONFIG_GRACE_MS;
 
-  // ---- Motion sampling ----
+    if (!clientConnected && !inGrace) {
+      suspendUntilLongPressToArm();
+    }
+    return;  // disarmed but awake: keep serving UI
+  }
+
+  // ---- Motion sampling (ARMED) ----
   if (now - lastSample >= SAMPLE_INTERVAL_MS) {
     lastSample = now;
 
