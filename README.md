@@ -86,8 +86,8 @@ Make sure the following libraries are installed (PlatformIO or Arduino IDE):
 
 | Function | Pin |
 |-----------|-----|
-| **LED Green** | D5 |
-| **LED Red** | D6 |
+| **LED Green** | D1 |
+| **LED Red** | D2 |
 | **Buzzer** | D8 |
 | **Button** | D4 |
 | **I²C SDA/SCL** | Internal (auto) |

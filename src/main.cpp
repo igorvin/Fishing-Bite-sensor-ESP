@@ -30,8 +30,8 @@
 // ==============================
 //            PINS
 // ==============================
-#define LED_GREEN   5
-#define LED_RED     6
+#define LED_GREEN   1
+#define LED_RED     2
 #define BUZZER      8
 #define BUTTON      4          // active-LOW (RTC-capable for EXT0)
 
