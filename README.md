@@ -1,5 +1,7 @@
 # 🎣 Fishing Bite Sensor (ESP32-S3 + BMI160)
 
+[Русская версия](./README_RU.md)
+
 **Fishing Bite Sensor** is an intelligent motion/vibration detector for fishing rods, built on the **Seeed XIAO ESP32-S3** platform and a **BMI160 accelerometer**.  
 It detects bites using acceleration magnitude changes and notifies with **LEDs and sound**.  
 The system includes a **web configuration UI** using **SettingsGyver**, supports **persistent settings**, and allows switching between **English / Russian** languages.
