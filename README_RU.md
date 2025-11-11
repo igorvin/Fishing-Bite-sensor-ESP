@@ -111,10 +111,6 @@
 | **Wi-Fi** | Имя точки доступа (SSID), пароль, кнопка «Сохранить и перезапустить» |
 | **Статус** | Светодиоды состояния, статус акселерометра, текущий язык, текущее Δg, счётчик срабатываний, время работы |
 
-<p align="center">
-  <img src="./img/Fishing_Bite_Sensor_en.png" width="300" alt="Fishing Bite Sensor Web EN">
-  <img src="./img/Fishing_Bite_Sensor_en_2.png" width="300" alt="Fishing Bite Sensor Web EN 2">
-</p>
 
 ---
 
