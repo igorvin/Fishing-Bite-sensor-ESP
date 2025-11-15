@@ -5,8 +5,8 @@
   - Storage:       LittleFS
   - Features:
       * ARMED/DISARMED (long-press button)
-      * Green LED = armed
-      * Red LED + buzzer pulses on motion
+      * Green LED = armed (with adjustable brightness)
+      * Red LED + buzzer pulses on motion (volume & brightness adjustable)
       * Long beep when armed, two short when disarmed
       * DISARMED → deep-sleep after grace period
       * Persistent AP SSID/password via Settings
@@ -32,12 +32,12 @@
 // ==============================
 // Header mapping reference (for clarity):
 //   D0 -> GPIO1  (ADC1_CH0)   - used for VBAT sense
-//   D1 -> GPIO2               - used for GREEN LED
-//   D2 -> GPIO3               - used for RED LED
+//   D1 -> GPIO2               - used for GREEN LED (MOSFET gate)
+//   D2 -> GPIO3               - used for RED LED   (MOSFET gate)
 
 #define LED_GREEN   2          // D1 / GPIO2
 #define LED_RED     3          // D2 / GPIO3
-#define BUZZER      8
+#define BUZZER      8          // MOSFET gate to buzzer
 #define BUTTON      4          // active-LOW (RTC-capable for EXT0)
 
 // VBAT sense: D0 (GPIO1 / ADC1_CH0) on XIAO ESP32-S3 header
@@ -101,7 +101,8 @@ uint32_t lastVbatMs = 0;
 DB_KEYS(
   kk,
   name, deltaG, shortPulse, pulsePeriod, contThresh,
-  armedSw, langIdx, langRu, apPass, saveRB   // keep legacy bool langRu for one-time migration
+  armedSw, langIdx, langRu, apPass, saveRB,
+  buzVol, ledRedLvl, ledGreenLvl
 );
 
 // UI holders (LEDs/labels)
@@ -174,34 +175,83 @@ int      cfg_langIdx=0;      // 0=EN, 1=RU
 bool     cfg_langRu=false;
 int      g_prevLangIdx=-1;
 
+// New output settings (0..100 %)
+uint16_t cfg_buzVolPct   = 100;   // buzzer volume %
+uint16_t cfg_ledRedPct   = 100;   // red LED brightness %
+uint16_t cfg_ledGreenPct = 100;   // green LED brightness %
+
 inline const LangPack& L(){ return cfg_langRu?LANG_RU:LANG_EN; }
 
 // ==============================
-// BUZZER HELPERS (ESP32-S3 safe)
+// BUZZER + LED PWM HELPERS (ESP32)
 // ==============================
 #ifdef ESP32
-  #ifndef BUZZER_LEDC_CH
-    #define BUZZER_LEDC_CH 0
-  #endif
-  static bool buzzerReady = false;
+  #define BUZZER_LEDC_CH 0
+  #define LED_GREEN_CH   1
+  #define LED_RED_CH     2
 
-  void buzzerInit() {
-    // timer+channel must be set before any tone call
-    ledcSetup(BUZZER_LEDC_CH, 2000 /*Hz*/, 10 /*bits*/);
+  const uint8_t BUZZER_BITS = 10;   // 0..1023
+  const uint8_t LED_BITS    = 8;    // 0..255
+
+  static bool pwmReady = false;
+
+  void pwmInit() {
+    // Buzzer: 3 kHz, 10-bit
+    ledcSetup(BUZZER_LEDC_CH, 3000, BUZZER_BITS);
     ledcAttachPin(BUZZER, BUZZER_LEDC_CH);
     ledcWrite(BUZZER_LEDC_CH, 0);
-    buzzerReady = true;
+
+    // LEDs: 1 kHz, 8-bit
+    ledcSetup(LED_GREEN_CH, 1000, LED_BITS);
+    ledcSetup(LED_RED_CH,   1000, LED_BITS);
+    ledcAttachPin(LED_GREEN, LED_GREEN_CH);
+    ledcAttachPin(LED_RED,   LED_RED_CH);
+    ledcWrite(LED_GREEN_CH, 0);
+    ledcWrite(LED_RED_CH,   0);
+
+    pwmReady = true;
   }
-  inline void buzzStart(uint32_t fHz){ if (buzzerReady) ledcWriteTone(BUZZER_LEDC_CH, fHz); }
-  inline void buzzStop(){ if (buzzerReady) ledcWriteTone(BUZZER_LEDC_CH, 0); }
+
+  inline uint16_t buzzerDuty(){
+    if (cfg_buzVolPct > 100) cfg_buzVolPct = 100;
+    return (uint16_t)((cfg_buzVolPct * ((1 << BUZZER_BITS) - 1)) / 100);
+  }
+
+  inline uint8_t ledDuty(uint16_t pct){
+    if (pct > 100) pct = 100;
+    return (uint8_t)((pct * ((1 << LED_BITS) - 1)) / 100);
+  }
+
+  inline void buzzStart(){
+    if (!pwmReady) return;
+    uint16_t d = buzzerDuty();
+    ledcWrite(BUZZER_LEDC_CH, d);
+  }
+
+  inline void buzzStop(){
+    if (!pwmReady) return;
+    ledcWrite(BUZZER_LEDC_CH, 0);
+  }
+
+  inline void setGreenLED(bool on){
+    if (!pwmReady) return;
+    ledcWrite(LED_GREEN_CH, on ? ledDuty(cfg_ledGreenPct) : 0);
+  }
+
+  inline void setRedLED(bool on){
+    if (!pwmReady) return;
+    ledcWrite(LED_RED_CH, on ? ledDuty(cfg_ledRedPct) : 0);
+  }
 #else
-  void buzzerInit() {}
-  inline void buzzStart(uint32_t fHz){ tone(BUZZER, fHz); }
-  inline void buzzStop(){ noTone(BUZZER); }
+  void pwmInit() {}
+  inline void buzzStart(){ digitalWrite(BUZZER, HIGH); }
+  inline void buzzStop(){  digitalWrite(BUZZER, LOW);  }
+  inline void setGreenLED(bool on){ digitalWrite(LED_GREEN, on ? HIGH : LOW); }
+  inline void setRedLED(bool on){   digitalWrite(LED_RED,   on ? HIGH : LOW); }
 #endif
 
-inline void longBeep(){ buzzStart(3000); delay(600); buzzStop(); }
-inline void shortBeep(){ buzzStart(3000); delay(150); buzzStop(); }
+inline void longBeep(){ buzzStart(); delay(600); buzzStop(); }
+inline void shortBeep(){ buzzStart(); delay(150); buzzStop(); }
 
 // ==============================
 // HELPERS
@@ -272,16 +322,24 @@ void wifiEnterLowPowerMode() {
 inline void startPulse(uint32_t now){
   (void)now;
   pulseOn=true; lastPulseStart=now; pulseOffAt=now+cfg_shortPulseMs;
-  digitalWrite(LED_RED,HIGH); buzzStart(3000); g_alerts++;
+  setRedLED(true);
+  buzzStart();
+  g_alerts++;
 }
-inline void stopPulse(){pulseOn=false; buzzStop(); digitalWrite(LED_RED,LOW);}
-inline void updateGreenLED(){digitalWrite(LED_GREEN,armed?HIGH:LOW);}
+inline void stopPulse(){
+  pulseOn=false;
+  buzzStop();
+  setRedLED(false);
+}
+
+inline void updateGreenLED(){ setGreenLED(armed); }
 
 // ==============================
 // ARM/DISARM + SLEEP
 // ==============================
 void suspendUntilLongPressToArm(){
-  digitalWrite(LED_RED,LOW); digitalWrite(LED_GREEN,LOW);
+  setRedLED(false);
+  setGreenLED(false);
   pinMode(BUTTON,INPUT_PULLUP);
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
   esp_sleep_enable_ext0_wakeup((gpio_num_t)BUTTON,0);
@@ -317,11 +375,19 @@ bool saveReboot_f=false;
 void build(sets::Builder& b){
   using namespace sets;
 
-  // --- General group with dropdown ---
+  // --- General group with language + output sliders ---
   {
     Group g(b,L().grpGeneral);
     b.Select(kk::langIdx, L().lblLanguage, "English\nРусский", AnyPtr(&cfg_langIdx));
     b.Label(H_langHintLbl, L().langHint);
+
+    const char* lblBuz = cfg_langRu ? u8"Громкость буззера" : "Buzzer volume";
+    const char* lblLR  = cfg_langRu ? u8"Яркость красного светодиода" : "Red LED brightness";
+    const char* lblLG  = cfg_langRu ? u8"Яркость зелёного светодиода" : "Green LED brightness";
+
+    b.Slider(kk::buzVol,    lblBuz, 0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_buzVolPct));
+    b.Slider(kk::ledRedLvl, lblLR,  0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_ledRedPct));
+    b.Slider(kk::ledGreenLvl,lblLG, 0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_ledGreenPct));
   }
 
   // --- Sensor group ---
@@ -361,6 +427,9 @@ void update(sets::Updater& u){
   db.set(kk::shortPulse,  (int)cfg_shortPulseMs);
   db.set(kk::pulsePeriod, (int)cfg_pulsePeriod);
   db.set(kk::contThresh,  (int)cfg_contThresh);
+  db.set(kk::buzVol,      (int)cfg_buzVolPct);
+  db.set(kk::ledRedLvl,   (int)cfg_ledRedPct);
+  db.set(kk::ledGreenLvl, (int)cfg_ledGreenPct);
 
   // Armed switch (web toggle)
   if (auto e = db.get(kk::armedSw)) cfg_armedSw = e.toBool();
@@ -384,6 +453,9 @@ void update(sets::Updater& u){
   cfg_shortPulseMs = clamp16(cfg_shortPulseMs, 40, 1000);
   cfg_pulsePeriod  = clamp16(cfg_pulsePeriod,  100, 2000);
   cfg_contThresh   = clamp16(cfg_contThresh,   50, 2000);
+  cfg_buzVolPct    = clamp16(cfg_buzVolPct,    0, 100);
+  cfg_ledRedPct    = clamp16(cfg_ledRedPct,    0, 100);
+  cfg_ledGreenPct  = clamp16(cfg_ledGreenPct,  0, 100);
 
   // Apply armed switch (also toggles Wi-Fi mode)
   // deepSleep=false: DISARMED always goes into grace-mode, not instant sleep
@@ -432,6 +504,9 @@ void update(sets::Updater& u){
   u.update(H_deltaLbl,  String(g_lastDelta, 3));
   u.update(H_alertsLbl, (int)g_alerts);
   u.update(H_uptimeLbl, (uint32_t)(millis() / 1000));
+
+  // Apply new brightness immediately for green LED (state indicator)
+  updateGreenLED();
 }
 
 // ==============================
@@ -460,7 +535,8 @@ void setup(){
   pinMode(LED_GREEN,OUTPUT); pinMode(LED_RED,OUTPUT);
   pinMode(BUZZER,OUTPUT);   pinMode(BUTTON,INPUT_PULLUP);
   pinMode(VBAT_PIN, INPUT);       // ADC input
-  buzzerInit();
+
+  pwmInit();
 
   Serial.begin(115200); delay(100);
 
@@ -480,6 +556,9 @@ void setup(){
   db.init(kk::armedSw, false);
   db.init(kk::langIdx, cfg_langIdx);   // new int index (0=EN,1=RU)
   db.init(kk::apPass,  cfg_apPass);
+  db.init(kk::buzVol,      (int)cfg_buzVolPct);
+  db.init(kk::ledRedLvl,   (int)cfg_ledRedPct);
+  db.init(kk::ledGreenLvl, (int)cfg_ledGreenPct);
 
   // One-time migration from old bool key 'langRu' if present
   if (auto e = db.get(kk::langRu)) {
@@ -497,6 +576,9 @@ void setup(){
   cfg_langIdx      = db.get(kk::langIdx).toInt();
   cfg_langRu       = (cfg_langIdx == 1);
   cfg_apPass       = db.get(kk::apPass).toString();
+  cfg_buzVolPct    = db.get(kk::buzVol).toInt();
+  cfg_ledRedPct    = db.get(kk::ledRedLvl).toInt();
+  cfg_ledGreenPct  = db.get(kk::ledGreenLvl).toInt();
 
   // --- Wi-Fi must be UP before SettingsGyver to avoid lwIP assert ---
   wifiEnterConfigMode();   // AP up now; ARMED path will shut off after 3 min
@@ -523,7 +605,6 @@ void setup(){
     // Configure accelerometer (low range, reasonable data rate)
     lsm6.setAccelRange(LSM6DS_ACCEL_RANGE_2_G);
     lsm6.setAccelDataRate(LSM6DS_RATE_104_HZ);
-    // Gyro config is not critical for this project; we ignore gyro data.
   }
 
   // Baseline calibration
