@@ -3,25 +3,30 @@
   - Accelerometer: LSM6DS3 (Adafruit LSM6DS library)
   - UI/Settings:   GyverDBFile + SettingsGyver
   - Storage:       LittleFS
+  - ESP-NOW:       Sends alarms to central ESP hub
   - Features:
       * ARMED/DISARMED (long-press button)
-      * Green LED = armed (with adjustable brightness)
-      * Red LED + buzzer pulses on motion (volume & brightness adjustable)
+      * Green LED = armed (PWM brightness)
+      * Red LED + buzzer pulses on motion (PWM volume/brightness)
       * Long beep when armed, two short when disarmed
       * DISARMED → deep-sleep after grace period
       * Persistent AP SSID/password via Settings
       * Language dropdown: English / Русский
-      * Power save: Wi-Fi OFF when ARMED (after 3-min config window)
+      * Power save: CPU at 80 MHz, Wi-Fi AP OFF in ARMED after 2 min
       * Battery monitor: % + voltage via ADC divider (100k/100k + 100nF)
+      * Low-battery alarm over ESP-NOW (eventType = 3)
+      * Web "Calibrate baseline & test alarm" button
+      * Automatic baseline recalibration on disarm
 ********************************************************/
 
 #include <Arduino.h>
 #include <Wire.h>
 #include <WiFi.h>
+#include <esp_now.h>               // --- ESP-NOW ---
 
 // ---- LSM6DS3 (Adafruit LSM6DS) ----
 #include <Adafruit_Sensor.h>
-#include <Adafruit_LSM6DS3TRC.h>   // for LSM6DS3; change to LSM6DS33 if needed
+#include <Adafruit_LSM6DS3TRC.h>
 
 #include <LittleFS.h>
 #include <GyverDBFile.h>
@@ -30,17 +35,13 @@
 // ==============================
 //            PINS (XIAO ESP32-S3)
 // ==============================
-// Header mapping reference (for clarity):
-//   D0 -> GPIO1  (ADC1_CH0)   - used for VBAT sense
-//   D1 -> GPIO2               - used for GREEN LED (MOSFET gate)
-//   D2 -> GPIO3               - used for RED LED   (MOSFET gate)
 
-#define LED_GREEN   2          // D1 / GPIO2
-#define LED_RED     3          // D2 / GPIO3
-#define BUZZER      8          // MOSFET gate to buzzer
-#define BUTTON      4          // active-LOW (RTC-capable for EXT0)
+#define LED_GREEN   2          // D1 / GPIO2 (PWM via MOSFET)
+#define LED_RED     3          // D2 / GPIO3 (PWM via MOSFET)
+#define BUZZER      8          // D8 / GPIO8 or GPIO9 - check your wiring! (PWM via MOSFET)
+#define BUTTON      4          // active-LOW
 
-// VBAT sense: D0 (GPIO1 / ADC1_CH0) on XIAO ESP32-S3 header
+// VBAT sense: D0 (GPIO1 / ADC1_CH0)
 #define VBAT_PIN    1          // D0 / GPIO1 / ADC1_CH0
 
 #define I2C_SDA_PIN -1
@@ -49,28 +50,34 @@
 // ==============================
 // LSM6DS3 CONFIG
 // ==============================
-const uint8_t LSM6_ADDR       = 0x6A;      // change to 0x6B if your board uses that
-const float   MS2_PER_G       = 9.80665f;  // m/s^2 per g
+const uint8_t LSM6_ADDR         = 0x6A;      // change to 0x6B if needed
+const float   MS2_PER_G         = 9.80665f;  // m/s^2 per g
 
 const uint8_t  TRIGGER_SAMPLES    = 3;
 const uint16_t LONG_PRESS_MS      = 1000;
 const uint16_t DEBOUNCE_MS        = 30;
 const uint16_t SAMPLE_INTERVAL_MS = 10;
-const uint32_t CONFIG_GRACE_MS    = 3UL * 60UL * 1000UL;   // disarmed → AP + config grace
-const uint32_t CONFIG_WINDOW_MS   = 3UL * 60UL * 1000UL;   // armed  → AP window before Wi-Fi OFF
+
+// Time windows
+const uint32_t DISARMED_AP_GRACE_MS = 3UL * 60UL * 1000UL;   // DISARMED → AP grace
+const uint32_t ARMED_AP_WINDOW_MS   = 2UL * 60UL * 1000UL;   // ARMED   → AP window
 
 // Battery read config
 const float    VBAT_VREF          = 3.30f;   // ADC reference (3.3V)
 const float    VBAT_DIV           = 2.00f;   // 100k / 100k divider
-const float    VBAT_CAL           = 1.00f;   // calibration factor (tweak ±2%)
-const uint16_t VBAT_SAMPLES       = 16;      // averaging
+const float    VBAT_CAL           = 1.00f;   // calibration factor
+const uint16_t VBAT_SAMPLES       = 16;
 const uint16_t VBAT_ADC_MAX       = 4095;
-const uint32_t VBAT_PERIOD_MS     = 5000;    // read every 5s
+const uint32_t VBAT_PERIOD_MS     = 5000;    // 5s
+
+// Low-battery ESP-NOW alert
+const int      LOW_BATT_THRESHOLD_PCT = 20;  // send alarm at/below this
+const int      LOW_BATT_HYSTERESIS    = 5;   // reset flag when goes above threshold+hyst
 
 // ==============================
 // STATE
 // ==============================
-Adafruit_LSM6DS3TRC lsm6;      // LSM6DS3/3TR-C instance (via Adafruit LSM6DS)
+Adafruit_LSM6DS3TRC lsm6;
 bool imuOK = false, armed = false;
 uint32_t lastSample = 0, motionStartMs = 0, bootMs = 0;
 uint8_t  consecutiveTriggers = 0;
@@ -88,21 +95,43 @@ volatile uint32_t g_alerts    = 0;
 
 // ARMED config window timer
 uint32_t wifiArmStart = 0;
-bool     wifiStillOnAfterArm = false;
+bool     wifiApActiveAfterArm = false;
 
 // Battery telemetry
 float    g_vbat_V = 0.0f;
 int      g_batt_pct = 0;
 uint32_t lastVbatMs = 0;
+bool     lowBattReported = false;
+
+// ==============================
+// ESP-NOW STATE
+// ==============================
+
+struct __attribute__((packed)) BitePacket {
+  char    rodName[16];   // sensor name / rod ID
+  uint8_t eventType;     // 1 = short/first, 2 = continuous, 3 = low battery
+  uint8_t batteryPct;    // 0..100
+  float   deltaG;        // last Δg
+};
+
+bool     cfg_espNowEn   = false;
+String   cfg_hubMacStr  = "";
+bool     espNowEnabled  = false;
+bool     espNowInited   = false;
+bool     hubMacValid    = false;
+// MAC of the HUB (ESP-NOW peer)
+uint8_t  hubMacAddr[6]  = {0};
 
 // ==============================
 // SETTINGS + DATABASE
 // ==============================
+// NOTE: GyverDB macro supports up to 15 keys; keep count <= 15
 DB_KEYS(
   kk,
   name, deltaG, shortPulse, pulsePeriod, contThresh,
-  armedSw, langIdx, langRu, apPass, saveRB,
-  buzVol, ledRedLvl, ledGreenLvl
+  armedSw, langIdx, testAlarm, apPass, saveRB,
+  buzVol, ledRedLvl, ledGreenLvl,
+  espNowEn, hubMac
 );
 
 // UI holders (LEDs/labels)
@@ -126,43 +155,77 @@ SettingsGyver sett("Fishing Bite Sensor", &db);
 // LOCALIZATION
 // ==============================
 struct LangPack {
-  const char* grpGeneral; const char* grpSensor; const char* grpWiFi; const char* grpStatus;
-  const char* lblLanguage; const char* langHint;
-  const char* lblSensitivity; const char* lblShortPulse; const char* lblPulsePeriod;
-  const char* lblContThresh; const char* lblArmedSwitch;
-  const char* lblName; const char* lblApPass; const char* lblSaveRestart;
-  const char* lblState; const char* lblAccel; const char* lblDeltaG;
-  const char* lblAlerts; const char* lblUptime;
+  const char* grpGeneral;
+  const char* grpSensor;
+  const char* grpWiFi;
+  const char* grpStatus;
+  const char* grpEspNow;
+
+  const char* lblLanguage;
+  const char* langHint;
+  const char* lblSensitivity;
+  const char* lblShortPulse;
+  const char* lblPulsePeriod;
+  const char* lblContThresh;
+  const char* lblArmedSwitch;
+
+  const char* lblName;
+  const char* lblApPass;
+  const char* lblSaveRestart;
+
+  const char* lblState;
+  const char* lblAccel;
+  const char* lblDeltaG;
+  const char* lblAlerts;
+  const char* lblUptime;
   const char* lblBattery;
-  const char* valArmed; const char* valDisarmed; const char* valAccelOK; const char* valAccelErr;
-  const char* msgNameBad; const char* msgPassBad; const char* msgSavedReboot; const char* msgLangChanged;
+
+  const char* lblEspNowEnable;
+  const char* lblHubMac;
+  const char* lblTestAlarm;
+
+  const char* valArmed;
+  const char* valDisarmed;
+  const char* valAccelOK;
+  const char* valAccelErr;
+
+  const char* msgNameBad;
+  const char* msgPassBad;
+  const char* msgSavedReboot;
+  const char* msgLangChanged;
+  const char* msgHubMacBad;
 };
 
 const LangPack LANG_EN = {
-  "General","Sensor","Wireless settings","Status",
+  "General","Sensor","Wireless settings","Status","ESP-NOW",
   "Language","(English / Русский)",
   "Sensitivity \xCE\x94g","Short pulse","Pulse period","Continuous threshold","Armed (web toggle)",
   "Sensor name (AP SSID)","AP password (Min 8 chars.)","Save & Restart",
   "State","Accelerometer","\xCE\x94g","Alerts","Uptime (s)",
   "Battery",
+  "Enable ESP-NOW","Hub MAC (AA:BB:CC:DD:EE:FF)","Calibrate baseline & test alarm",
   "ARMED","DISARMED","OK","ERROR",
   "Sensor name / SSID (1..32 chars.)",
   "Password (min 8 chars.)",
   "Saved. Rebooting to apply AP SSID/password...",
-  "Language changed. Refresh the page."
+  "Language changed. Refresh the page.",
+  "Hub MAC format invalid"
 };
 
 const LangPack LANG_RU = {
-  u8"Общие",u8"Датчик",u8"Настройки Wi-Fi",u8"Статус",
+  u8"Общие",u8"Датчик",u8"Настройки Wi-Fi",u8"Статус",u8"ESP-NOW",
   u8"Язык",u8"(Русский / English)",
   u8"Чувствительность Δg",u8"Короткий импульс",u8"Период импульсов",u8"Порог непрерывности",u8"Охрана (веб-переключатель)",
   u8"Имя датчика (SSID AP)",u8"Пароль AP (мин. 8 симв.)",u8"Сохранить и перезагрузить",
   u8"Состояние",u8"Акселерометр",u8"Δg",u8"Срабатывания",u8"Время работы (с)",
   u8"Батарея",
+  u8"Включить ESP-NOW",u8"MAC хаба (AA:BB:CC:DD:EE:FF)",u8"Калибровка базы + тест",
   u8"ОХРАНА",u8"СНЯТО",u8"ОК",u8"ОШИБКА",
-  u8"Имя датчика / SSID 1–32 симв.",u8"Пароль (8 симв.).",
+  u8"Имя датчика / SSID 1–32 символов",
+  u8"Пароль (мин. 8 символов)",
   u8"Сохранено. Перезагрузка для применения SSID/пароля...",
-  u8"Язык изменён. Обновите страницу."
+  u8"Язык изменён. Обновите страницу.",
+  u8"Неверный формат MAC хаба"
 };
 
 String   cfg_name="BiteSensor", cfg_apPass="";
@@ -175,7 +238,7 @@ int      cfg_langIdx=0;      // 0=EN, 1=RU
 bool     cfg_langRu=false;
 int      g_prevLangIdx=-1;
 
-// New output settings (0..100 %)
+// Output settings
 uint16_t cfg_buzVolPct   = 100;   // buzzer volume %
 uint16_t cfg_ledRedPct   = 100;   // red LED brightness %
 uint16_t cfg_ledGreenPct = 100;   // green LED brightness %
@@ -265,14 +328,13 @@ static inline float clampf(float v,float lo,float hi){return v<lo?lo:(v>hi?hi:v)
 // ==============================
 float readVbat() {
   uint32_t acc = 0;
-  analogRead(VBAT_PIN);                    // dummy to charge sampling cap
+  analogRead(VBAT_PIN);                    // dummy
   for (int i=0;i<VBAT_SAMPLES;i++) acc += analogRead(VBAT_PIN);
   float adc = acc / float(VBAT_SAMPLES);
   float v = (adc / VBAT_ADC_MAX) * VBAT_VREF * VBAT_DIV * VBAT_CAL;
   return v;
 }
 
-// Rough Li-ion percentage curve (resting)
 int vbatToPercent(float v) {
   if      (v >= 4.18f) return 100;
   else if (v >= 4.10f) return 90;
@@ -288,7 +350,7 @@ int vbatToPercent(float v) {
 }
 
 // ==============================
-// Wi-Fi POWER MODES
+// Wi-Fi MODES
 // ==============================
 void configureAP(const String& ssid,const String& pass){
   WiFi.softAPdisconnect(true);
@@ -300,32 +362,120 @@ void configureAP(const String& ssid,const String& pass){
   Serial.println(WiFi.softAPIP());
 }
 
-// AP on for config (DISARMED or ARMED window)
 void wifiEnterConfigMode() {
   WiFi.mode(WIFI_AP_STA);
   WiFi.setHostname(cfg_name.c_str());
   configureAP(cfg_name, cfg_apPass);
-  WiFi.setSleep(true);          // save power in AP idle
+  WiFi.setSleep(true);
 }
 
-// Full Wi-Fi OFF for low power (ARMED after window)
-void wifiEnterLowPowerMode() {
+// Called after ARMED AP window expires
+void wifiAfterArmWindow() {
+  // Turn AP off, keep STA (for ESP-NOW)
   WiFi.softAPdisconnect(true);
-  WiFi.disconnect(true, true);
-  delay(50);
-  WiFi.mode(WIFI_OFF);
+  Serial.println("AP disabled after ARM window");
+
+  // If ESP-NOW disabled or hub MAC invalid – we can save power more aggressively
+  if (!espNowEnabled || !hubMacValid) {
+    WiFi.disconnect(true, true);
+    delay(50);
+    WiFi.mode(WIFI_OFF);
+    Serial.println("WiFi fully OFF (no ESP-NOW)");
+  }
+}
+
+// ==============================
+// ESP-NOW HELPERS
+// ==============================
+bool parseMac(const String& mac, uint8_t out[6]) {
+  if (mac.length() != 17) return false;
+  int vals[6];
+  if (sscanf(mac.c_str(),
+             "%x:%x:%x:%x:%x:%x",
+             &vals[0], &vals[1], &vals[2],
+             &vals[3], &vals[4], &vals[5]) != 6) return false;
+  for (int i=0;i<6;i++) out[i] = (uint8_t)vals[i];
+  return true;
+}
+
+void onEspNowSent(const uint8_t *mac, esp_now_send_status_t status) {
+  (void)mac;
+  (void)status;
+  // Optional: debug
+  // Serial.print("ESP-NOW send status: ");
+  // Serial.println(status == ESP_NOW_SEND_SUCCESS ? "OK" : "FAIL");
+}
+
+void espNowBegin() {
+  if (!espNowEnabled || espNowInited || !hubMacValid) return;
+
+  if (WiFi.getMode() == WIFI_OFF) {
+    WiFi.mode(WIFI_STA);
+  }
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    return;
+  }
+  espNowInited = true;
+  esp_now_register_send_cb(onEspNowSent);
+
+  esp_now_peer_info_t peer{};
+  memcpy(peer.peer_addr, hubMacAddr, 6);
+  peer.channel = 0;     // current Wi-Fi channel
+  peer.encrypt = false;
+
+  if (esp_now_add_peer(&peer) != ESP_OK) {
+    Serial.println("ESP-NOW add peer failed");
+  } else {
+    Serial.println("ESP-NOW peer added");
+  }
+}
+
+void espNowEnd() {
+  if (!espNowInited) return;
+  esp_now_deinit();
+  espNowInited = false;
+  Serial.println("ESP-NOW deinit");
+}
+
+void sendBitePacket(uint8_t eventType) {
+  if (!espNowEnabled || !espNowInited || !hubMacValid) return;
+
+  BitePacket pkt{};
+  // rod ID = sensor name (AP SSID)
+  strlcpy(pkt.rodName, cfg_name.c_str(), sizeof(pkt.rodName));
+  pkt.eventType  = eventType;
+  pkt.batteryPct = (uint8_t) constrain(g_batt_pct, 0, 100);
+  pkt.deltaG     = g_lastDelta;
+
+  esp_now_send(hubMacAddr, (uint8_t*)&pkt, sizeof(pkt));
 }
 
 // ==============================
 // ALERT PULSES / LEDS
 // ==============================
-inline void startPulse(uint32_t now){
+inline void startPulse(uint32_t now, uint8_t eventType){
   (void)now;
-  pulseOn=true; lastPulseStart=now; pulseOffAt=now+cfg_shortPulseMs;
+  pulseOn        = true;
+  lastPulseStart = now;
+  pulseOffAt     = now + cfg_shortPulseMs;
   setRedLED(true);
   buzzStart();
   g_alerts++;
+  sendBitePacket(eventType);
 }
+
+inline void startTestPulse() {
+  // Local test pulse: do NOT send ESP-NOW, do NOT increment alerts
+  uint32_t now = millis();
+  pulseOn        = true;
+  lastPulseStart = now;
+  pulseOffAt     = now + cfg_shortPulseMs;
+  setRedLED(true);
+  buzzStart();
+}
+
 inline void stopPulse(){
   pulseOn=false;
   buzzStop();
@@ -333,6 +483,31 @@ inline void stopPulse(){
 }
 
 inline void updateGreenLED(){ setGreenLED(armed); }
+
+// ==============================
+// BASELINE RECALIBRATION
+// ==============================
+void recalibrateBaseline() {
+  if (!imuOK) return;
+  float sum = 0.0f;
+  int   cnt = 0;
+  for (int i=0;i<50;i++) {
+    sensors_event_t accel, gyro, temp;
+    if (lsm6.getEvent(&accel, &gyro, &temp)) {
+      float gx = accel.acceleration.x / MS2_PER_G;
+      float gy = accel.acceleration.y / MS2_PER_G;
+      float gz = accel.acceleration.z / MS2_PER_G;
+      sum += mag3(gx, gy, gz);
+      cnt++;
+    }
+    delay(10);
+  }
+  if (cnt > 0) {
+    baselineMagG = sum / (float)cnt;
+    Serial.print("Baseline recalibrated: ");
+    Serial.println(baselineMagG, 4);
+  }
+}
 
 // ==============================
 // ARM/DISARM + SLEEP
@@ -350,18 +525,25 @@ void setArmed(bool v,bool deepSleep){
   armed=v; cfg_armedSw=v; db.set(kk::armedSw,v); updateGreenLED();
 
   if(v){
-    // Enter ARMED: long beep, keep AP ON for CONFIG_WINDOW_MS then turn Wi-Fi off
+    // Enter ARMED
     longBeep();
     wifiArmStart = millis();
-    wifiStillOnAfterArm = true;   // loop will switch to low-power after window
+    wifiApActiveAfterArm = true;
+
+    // Prepare ESP-NOW if enabled
+    if (espNowEnabled && hubMacValid) espNowBegin();
   } else {
-    // Enter DISARMED: two short beeps, AP ON for user config, then
-    // loop() will handle deep sleep after CONFIG_GRACE_MS
+    // Recalibrate baseline when disarmed
+    recalibrateBaseline();
+
+    // Leaving ARMED: stop ESP-NOW to save power
+    espNowEnd();
+
+    // DISARMED: AP ON, then deep sleep handled in loop
     shortBeep(); delay(80); shortBeep();
     wifiEnterConfigMode();
 
     if (deepSleep) {
-      // optional immediate deep-sleep path (not used by button or web now)
       suspendUntilLongPressToArm();
     }
   }
@@ -370,24 +552,28 @@ void setArmed(bool v,bool deepSleep){
 // ==============================
 // SETTINGS UI
 // ==============================
-bool saveReboot_f=false;
+bool saveReboot_f = false;
+bool testAlarm_f  = false;
 
 void build(sets::Builder& b){
   using namespace sets;
 
-  // --- General group with language + output sliders ---
+  // --- General group ---
   {
     Group g(b,L().grpGeneral);
     b.Select(kk::langIdx, L().lblLanguage, "English\nРусский", AnyPtr(&cfg_langIdx));
     b.Label(H_langHintLbl, L().langHint);
 
-    const char* lblBuz = cfg_langRu ? u8"Громкость буззера" : "Buzzer volume";
+    const char* lblBuz = cfg_langRu ? u8"Громкость зуммера" : "Buzzer volume";
     const char* lblLR  = cfg_langRu ? u8"Яркость красного светодиода" : "Red LED brightness";
     const char* lblLG  = cfg_langRu ? u8"Яркость зелёного светодиода" : "Green LED brightness";
 
     b.Slider(kk::buzVol,    lblBuz, 0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_buzVolPct));
     b.Slider(kk::ledRedLvl, lblLR,  0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_ledRedPct));
     b.Slider(kk::ledGreenLvl,lblLG, 0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_ledGreenPct));
+
+    // Calibrate + test button
+    if (b.Button(kk::testAlarm, L().lblTestAlarm)) testAlarm_f = true;
   }
 
   // --- Sensor group ---
@@ -398,6 +584,13 @@ void build(sets::Builder& b){
     b.Slider(kk::pulsePeriod, L().lblPulsePeriod, 100.0f, 2000.0f, 10.0f, "ms", AnyPtr(&cfg_pulsePeriod));
     b.Slider(kk::contThresh,  L().lblContThresh,  50.0f, 2000.0f, 10.0f, "ms", AnyPtr(&cfg_contThresh));
     b.Switch(kk::armedSw, L().lblArmedSwitch);
+  }
+
+  // --- ESP-NOW group ---
+  {
+    Group g(b, L().grpEspNow);
+    b.Switch(kk::espNowEn, L().lblEspNowEnable);
+    b.Input(kk::hubMac, L().lblHubMac);
   }
 
   // --- Wi-Fi group ---
@@ -412,7 +605,7 @@ void build(sets::Builder& b){
   {
     Group g(b,L().grpStatus);
     b.Label(H_stateLbl,  L().lblState);  b.LED(H_stateLED);
-    b.Label(H_accelLbl,  L().lblAccel);  b.LED(" ", H_accelLED);
+    b.Label(H_accelLbl,  L().lblAccel);  b.LED(H_accelLED);
     b.LED(H_langLED);                    b.Label(H_langLbl,   L().lblLanguage);
     b.LED(H_battLED);                    b.Label(H_battLbl,   L().lblBattery);
     b.Label(H_deltaLbl,   L().lblDeltaG);
@@ -431,10 +624,23 @@ void update(sets::Updater& u){
   db.set(kk::ledRedLvl,   (int)cfg_ledRedPct);
   db.set(kk::ledGreenLvl, (int)cfg_ledGreenPct);
 
+  // ESP-NOW settings
+  if (auto e = db.get(kk::espNowEn))   cfg_espNowEn = e.toBool();
+  if (auto e = db.get(kk::hubMac))     cfg_hubMacStr = e.toString();
+
+  espNowEnabled = cfg_espNowEn;
+  hubMacValid   = false;
+  if (cfg_hubMacStr.length() > 0) {
+    hubMacValid = parseMac(cfg_hubMacStr, hubMacAddr);
+    if (!hubMacValid) {
+      u.alert(L().msgHubMacBad);
+    }
+  }
+
   // Armed switch (web toggle)
   if (auto e = db.get(kk::armedSw)) cfg_armedSw = e.toBool();
 
-  // Language index change detection from bound variable
+  // Language index change detection
   if (cfg_langIdx != g_prevLangIdx) {
     g_prevLangIdx = cfg_langIdx;
     cfg_langRu = (cfg_langIdx == 1);
@@ -457,8 +663,7 @@ void update(sets::Updater& u){
   cfg_ledRedPct    = clamp16(cfg_ledRedPct,    0, 100);
   cfg_ledGreenPct  = clamp16(cfg_ledGreenPct,  0, 100);
 
-  // Apply armed switch (also toggles Wi-Fi mode)
-  // deepSleep=false: DISARMED always goes into grace-mode, not instant sleep
+  // Apply armed switch (no immediate deep sleep)
   if (cfg_armedSw != armed) setArmed(cfg_armedSw, false);
 
   // Save & restart for Wi-Fi creds / SSID
@@ -478,6 +683,13 @@ void update(sets::Updater& u){
     }
   }
 
+  // Handle web "Calibrate baseline & test alarm" button
+  if (testAlarm_f) {
+    testAlarm_f = false;
+    recalibrateBaseline();
+    startTestPulse();
+  }
+
   // ---- Status ----
   u.update(H_stateLbl, armed ? String(L().valArmed) : String(L().valDisarmed));
   u.updateColor(H_stateLED, armed ? sets::Colors::Aqua : sets::Colors::Pink);
@@ -488,7 +700,7 @@ void update(sets::Updater& u){
   u.update(H_langLbl, cfg_langRu ? String("Русский") : String("English"));
   u.updateColor(H_langLED, cfg_langRu ? sets::Colors::Yellow : sets::Colors::Blue);
 
-  // Battery line (text + LED color)
+  // Battery
   {
     String txt = String(g_batt_pct) + "% (" + String(g_vbat_V, 2) + " V)";
     u.update(H_battLbl, txt);
@@ -505,7 +717,7 @@ void update(sets::Updater& u){
   u.update(H_alertsLbl, (int)g_alerts);
   u.update(H_uptimeLbl, (uint32_t)(millis() / 1000));
 
-  // Apply new brightness immediately for green LED (state indicator)
+  // Apply new brightness immediately for green LED
   updateGreenLED();
 }
 
@@ -521,8 +733,6 @@ static void handleButton(uint32_t now){
   }
   if (btnIsDown && !longFired && (now - btnDownAt) >= LONG_PRESS_MS) {
     longFired = true;
-    // Long press toggles armed <-> disarmed
-    // DISARMED goes into grace-mode (no immediate sleep)
     if (armed) setArmed(false, false);
     else       setArmed(true,  false);
   }
@@ -532,13 +742,21 @@ static void handleButton(uint32_t now){
 // SETUP
 // ==============================
 void setup(){
-  pinMode(LED_GREEN,OUTPUT); pinMode(LED_RED,OUTPUT);
-  pinMode(BUZZER,OUTPUT);   pinMode(BUTTON,INPUT_PULLUP);
-  pinMode(VBAT_PIN, INPUT);       // ADC input
+  pinMode(LED_GREEN,OUTPUT);
+  pinMode(LED_RED,OUTPUT);
+  pinMode(BUZZER,OUTPUT);
+  pinMode(BUTTON,INPUT_PULLUP);
+  pinMode(VBAT_PIN, INPUT);
+
+  Serial.begin(115200);
+  delay(100);
+
+#ifdef ESP32
+  // Lower CPU frequency for power saving
+  setCpuFrequencyMhz(80);
+#endif
 
   pwmInit();
-
-  Serial.begin(115200); delay(100);
 
 #ifdef ESP32
   LittleFS.begin(true);
@@ -547,24 +765,21 @@ void setup(){
 #endif
   db.begin();
 
-  // First-run defaults
-  db.init(kk::name, cfg_name);
-  db.init(kk::deltaG, cfg_deltaG);
+  // Defaults
+  db.init(kk::name,       cfg_name);
+  db.init(kk::deltaG,     cfg_deltaG);
   db.init(kk::shortPulse, (int)cfg_shortPulseMs);
   db.init(kk::pulsePeriod,(int)cfg_pulsePeriod);
-  db.init(kk::contThresh,(int)cfg_contThresh);
-  db.init(kk::armedSw, false);
-  db.init(kk::langIdx, cfg_langIdx);   // new int index (0=EN,1=RU)
-  db.init(kk::apPass,  cfg_apPass);
+  db.init(kk::contThresh, (int)cfg_contThresh);
+  db.init(kk::armedSw,    false);
+  db.init(kk::langIdx,    cfg_langIdx);
+  db.init(kk::apPass,     cfg_apPass);
   db.init(kk::buzVol,      (int)cfg_buzVolPct);
   db.init(kk::ledRedLvl,   (int)cfg_ledRedPct);
   db.init(kk::ledGreenLvl, (int)cfg_ledGreenPct);
-
-  // One-time migration from old bool key 'langRu' if present
-  if (auto e = db.get(kk::langRu)) {
-    bool legacyRu = e.toBool();
-    db.set(kk::langIdx, legacyRu ? 1 : 0);
-  }
+  db.init(kk::espNowEn,    false);
+  db.init(kk::hubMac,      cfg_hubMacStr);
+  db.init(kk::testAlarm,   0);   // just to have key in DB
 
   // Load persisted
   cfg_name         = db.get(kk::name).toString();
@@ -579,9 +794,17 @@ void setup(){
   cfg_buzVolPct    = db.get(kk::buzVol).toInt();
   cfg_ledRedPct    = db.get(kk::ledRedLvl).toInt();
   cfg_ledGreenPct  = db.get(kk::ledGreenLvl).toInt();
+  cfg_espNowEn     = db.get(kk::espNowEn).toBool();
+  cfg_hubMacStr    = db.get(kk::hubMac).toString();
 
-  // --- Wi-Fi must be UP before SettingsGyver to avoid lwIP assert ---
-  wifiEnterConfigMode();   // AP up now; ARMED path will shut off after 3 min
+  espNowEnabled = cfg_espNowEn;
+  hubMacValid = false;
+  if (cfg_hubMacStr.length() > 0) {
+    hubMacValid = parseMac(cfg_hubMacStr, hubMacAddr);
+  }
+
+  // Wi-Fi must be UP before SettingsGyver
+  wifiEnterConfigMode();
 
   // Settings UI
   sett.begin();
@@ -593,42 +816,27 @@ void setup(){
   else Wire.begin();
   Wire.setClock(100000);
 
-  // ---- LSM6DS3 init ----
-  if (!lsm6.begin_I2C(LSM6_ADDR)) {   // pass address if needed
+  // LSM6DS3 init
+  if (!lsm6.begin_I2C(LSM6_ADDR)) {
     Serial.println("LSM6DS3 not found");
     imuOK = false;
   } else {
     imuOK = true;
     Serial.print("LSM6DS3 found @0x");
     Serial.println(LSM6_ADDR, HEX);
-
-    // Configure accelerometer (low range, reasonable data rate)
     lsm6.setAccelRange(LSM6DS_ACCEL_RANGE_2_G);
     lsm6.setAccelDataRate(LSM6DS_RATE_104_HZ);
   }
 
-  // Baseline calibration
-  if (imuOK){
-    float sum=0;
-    for(int i=0;i<50;i++){
-      sensors_event_t accel, gyro, temp;
-      if (lsm6.getEvent(&accel, &gyro, &temp)) {
-        float gx = accel.acceleration.x / MS2_PER_G;
-        float gy = accel.acceleration.y / MS2_PER_G;
-        float gz = accel.acceleration.z / MS2_PER_G;
-        sum += mag3(gx,gy,gz);
-      }
-      delay(10);
-    }
-    baselineMagG = sum/50.0f;
-  }
+  // Baseline calibration (initial)
+  recalibrateBaseline();
 
-  // Apply initial ARMED/DISARMED state and Wi-Fi mode
+  // Apply initial ARMED/DISARMED
   setArmed(cfg_armedSw,false);
   bootMs = millis();
 
-  // Prime a first battery reading
-  g_vbat_V = readVbat();
+  // Initial battery reading
+  g_vbat_V   = readVbat();
   g_batt_pct = vbatToPercent(g_vbat_V);
   lastVbatMs = millis();
 }
@@ -643,29 +851,37 @@ void loop(){
   handleButton(now);
   updateGreenLED();
 
-  // ARMED: after 3 min window, turn Wi-Fi fully OFF
-  if (armed && wifiStillOnAfterArm && (now - wifiArmStart >= CONFIG_WINDOW_MS)) {
-    wifiEnterLowPowerMode();
-    wifiStillOnAfterArm = false;
+  // ARMED: after 2 min, turn AP OFF (keep ESP-NOW)
+  if (armed && wifiApActiveAfterArm && (now - wifiArmStart >= ARMED_AP_WINDOW_MS)) {
+    wifiAfterArmWindow();
+    wifiApActiveAfterArm = false;
   }
 
   // DISARMED: keep AP for grace or while client connected, then deep sleep
   if (!armed){
     bool clientConnected = (WiFi.softAPgetStationNum()>0);
-    bool inGrace = (now - bootMs) < CONFIG_GRACE_MS;
+    bool inGrace = (now - bootMs) < DISARMED_AP_GRACE_MS;
     if (!clientConnected && !inGrace) suspendUntilLongPressToArm();
-
-    // still allow battery refresh while disarmed
   }
 
-  // Battery refresh (every VBAT_PERIOD_MS)
+  // Battery refresh + low-battery ESP-NOW alarm
   if (now - lastVbatMs >= VBAT_PERIOD_MS) {
     lastVbatMs = now;
-    g_vbat_V = readVbat();
+    g_vbat_V   = readVbat();
     g_batt_pct = vbatToPercent(g_vbat_V);
+
+    if (armed && espNowEnabled && espNowInited && hubMacValid) {
+      if (!lowBattReported && g_batt_pct <= LOW_BATT_THRESHOLD_PCT) {
+        // 3 = low-battery event
+        sendBitePacket(3);
+        lowBattReported = true;
+      } else if (lowBattReported && g_batt_pct > LOW_BATT_THRESHOLD_PCT + LOW_BATT_HYSTERESIS) {
+        lowBattReported = false;
+      }
+    }
   }
 
-  if (!armed) return;  // disarmed path handled above (sleep logic)
+  if (!armed) return;  // disarmed path handled above
 
   // Motion sampling
   if (now - lastSample >= SAMPLE_INTERVAL_MS){
@@ -673,7 +889,6 @@ void loop(){
     if (imuOK){
       sensors_event_t accel, gyro, temp;
       if (lsm6.getEvent(&accel, &gyro, &temp)) {
-        // convert m/s^2 to g
         float gx = accel.acceleration.x / MS2_PER_G;
         float gy = accel.acceleration.y / MS2_PER_G;
         float gz = accel.acceleration.z / MS2_PER_G;
@@ -688,7 +903,8 @@ void loop(){
 
         bool motionNow = (consecutiveTriggers >= TRIGGER_SAMPLES);
         if (motionNow && !inMotion){
-          inMotion = true; motionStartMs = now; startPulse(now);
+          inMotion = true; motionStartMs = now;
+          startPulse(now, 1);   // 1 = first / short
         } else if (!motionNow && inMotion){
           inMotion = false;
         }
@@ -703,7 +919,7 @@ void loop(){
     uint32_t motionDur = now - motionStartMs;
     if (motionDur >= cfg_contThresh){
       if (!pulseOn && (now - lastPulseStart) >= cfg_pulsePeriod){
-        startPulse(now);
+        startPulse(now, 2);    // 2 = continuous
       }
     }
   }
