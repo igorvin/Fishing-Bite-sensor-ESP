@@ -107,31 +107,31 @@ struct BitePacket {
 
 ----
 
-##🔎 Field Details
+## 🔎 Field Details
 
-# rodName[16]
+### rodName[16]
 Human-readable name of the rod / sensor.
 Usually matches the AP SSID / sensor name configured on the rod device.
 
-# eventType
+#### eventType
 Encodes the type of event the rod reports:
 - 1 – Short bite / first trigger
 - 2 – Continuous vibration / prolonged motion
 - 3 – Low battery on the rod device (no bite, just status)
-# The Hub can:
+### The Hub can:
 Show different messages or icons based on eventType
 For example:
 - 1 – flash screen once
 - 2 – keep flashing or beep multiple times
 - 3 – show "LOW BAT" plus rod name
 
-# batteryPct
+#### batteryPct
 Battery level of the rod sensor, already mapped to 0–100%.
 Can be used by the Hub to:
 - Show per-rod battery status
 - Decide when to display warnings or log maintenance
 
-# deltaG
+#### deltaG
 Last measured vibration intensity in Δg (difference from baseline gravity).
 Useful for debugging, tuning sensitivity, or showing how strong the bite was.
 
@@ -147,21 +147,21 @@ Optional beeper / LED:
  - Can be added to signal alerts with sound and/or light
  -Driven via transistor/MOSFET from a GPIO pin
 
-##🔄 System Architecture
-# 1.Rod Sensor (ESP32 + accelerometer)
+## 🔄 System Architecture
+### 1.Rod Sensor (ESP32 + accelerometer)
      Measures vibration via IMU (e.g., LSM6DS3 / BMI160 / etc.)
      Detects short and continuous bites based on Δg and time
      Monitors its own battery
      Sends BitePacket via ESP-NOW to the Hub’s MAC
 
-# 2.ESP-NOW Hub (this project)
+### 2.ESP-NOW Hub (this project)
   - Listens for BitePacket on ESP-NOW
   - On packet reception:
      - Parses rodName, eventType, batteryPct, deltaG
      - Updates OLED display accordingly
      - Optionally drives a buzzer/LED
 
-##🧪 Testing & Debugging
+## 🧪 Testing & Debugging
 
 Use Serial Monitor (115200 baud) to:
  - Print received packets
@@ -170,7 +170,7 @@ Use Serial Monitor (115200 baud) to:
 Use one rod sensor first to test range and reliability
 Add more rods once basic communication is stable
 
-📁 Project Structure (recommended)
+## 📁 Project Structure (recommended)
 
 hub/
   - src/main.cpp – ESP-NOW Hub firmware
