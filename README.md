@@ -2,9 +2,10 @@
 
 [Русская версия](./README_RU.md)
 
-**Fishing Bite Sensor** is an intelligent motion/vibration detector that mounted on the fishing rods, built on the **Seeed XIAO ESP32-S3** platform and an **LSM6DS3 accelerometer**.  
-It detects bites using acceleration magnitude changes and notifies with **LEDs and sound**.  
-The system includes a **web configuration UI** using **SettingsGyver**, supports **persistent settings**, and allows switching between **English / Russian** languages.
+**Fishing Bite Sensor** is an intelligent motion/vibration detector mounted on fishing rods, built on the **Seeed XIAO ESP32-S3** platform and an **LSM6DS3 accelerometer**.  
+It detects bites using acceleration magnitude changes and notifies with **LEDs and sound**, and now can also send **wireless alerts** to a central **ESP-NOW Hub (Beeper)**.
+
+The system includes a **web configuration UI** (SettingsGyver), supports **persistent settings**, allows switching between **English / Russian**, and uses **ESP-NOW** to report bite events and low battery to the hub.
 
 ---
 <p align="center">
@@ -12,173 +13,276 @@ The system includes a **web configuration UI** using **SettingsGyver**, supports
   <img src="./img/Fishing Bite Sensor_en 2.png" width="300" alt="Fishing Bite Sensor Web EN 2">
 </p>
 
+---
 
 ## 🧠 Features
 
 - **Motion Detection**
   - Detects vibration or movement using the **LSM6DS3 accelerometer** (via Adafruit LSM6DS library).
-  - Short beep + red LED flash for brief vibration.
-  - Continuous pulse signals when motion persists.
+  - Uses Δg (difference from baseline gravity) to detect bites.
+  - Short pulse (buzzer + red LED) for brief vibration.
+  - Repeated pulses for continuous motion.
+  - **Automatic baseline calibration**:
+    - On power-up.
+    - When switching to **DISARMED** mode.
+    - On demand via web UI (“Calibrate baseline & test alarm”).
+
+- **ESP-NOW Wireless Alerts**
+  - Sends bite events to a central **ESP-NOW Hub** (Beeper) without any Wi-Fi router.
+  - **Configurable:** ESP-NOW enable/disable in the web UI.
+  - Hub MAC address configurable as `AA:BB:CC:DD:EE:FF`.
+  - Sends structured packets with:
+    - Rod name (ID)
+    - Event type (short, continuous, low battery)
+    - Battery percentage
+    - Δg (vibration intensity).
+
+- **Low-Battery Warning (ESP-NOW)**
+  - Periodically measures battery voltage and calculates %.
+  - When battery drops below threshold, sends a **low-battery ESP-NOW event** to the hub.
+  - Uses hysteresis to avoid spam (reports once per low-battery state).
 
 - **Arming / Disarming**
-  - Controlled by a **long button press** (1 second).
-  - **Green LED ON** → Armed.
-  - **Green LED OFF** → Disarmed (power-saving).
+  - Controlled by a **long button press** (~1 second).
+  - **Green LED ON** → Armed (ready to detect bites).
+  - **Green LED OFF** → Disarmed (configuration/sleep mode).
+  - Web UI also has an **Armed/Disarmed toggle** (software).
 
 - **Audio/Visual Alerts**
-  - **Long beep** when armed.
-  - **Two short beeps** when disarmed.
-  - **Red LED + buzzer** pulse on detected motion.
+  - **Long beep** when entering ARMED mode.
+  - **Two short beeps** when entering DISARMED mode.
+  - **Red LED + buzzer** pulse on detected motion (short or continuous event).
+  - Test mode from web UI:
+    - Recalibrates baseline.
+    - Makes a short local buzzer + red LED pulse.
+    - Does **not** send ESP-NOW packet (quiet bench test).
 
 - **Adjustable Buzzer Volume & LED Brightness**
-  - **Buzzer volume** can be configured from 0–100 % via a slider in the web UI.
-  - **Red LED brightness** (alert) and **Green LED brightness** (armed state) are independently adjustable (0–100 %) via sliders.
-  - Implemented using ESP32 **PWM (ledc)** driving MOSFETs, as in the hardware schematic.
+  - **Buzzer volume** configurable from 0–100 % in the web UI.
+  - **Red LED brightness** (alert) and **Green LED brightness** (armed state) are independently adjustable (0–100 %).
+  - Implemented using ESP32 **PWM (ledc)** driving MOSFETs.
 
 - **Deep Sleep Mode**
-  - When disarmed, after a **3-minute grace period**,  
-    if no Wi-Fi clients are connected, the board enters **deep sleep** to preserve battery life.
-  - Wakes up when the button is pressed.
+  - **DISARMED:**
+    - Keeps AP active for a **3-minute grace period**.
+    - If no Wi-Fi clients are connected → enters **deep sleep** to preserve battery.
+  - Wakeup from deep sleep via **button press** (EXT0 wake).
+  - **ARMED:**
+    - AP is active only for the first **2 minutes** for quick configuration, then automatically turned off.
+    - ESP-NOW can remain active with Wi-Fi radio in minimal mode.
 
 - **Configuration Web UI**
-  - Built on **GyverDBFile** + **SettingsGyver**.
+  - Built on **GyverDBFile** + **SettingsGyver** with **LittleFS** storage.
   - Access via the ESP’s **Wi-Fi Access Point**.
   - Allows configuration of:
-    - Sensor name (AP SSID)
-    - AP password
-    - Sensitivity (Δg threshold)
-    - Pulse duration & period
-    - Continuous motion threshold
-    - Armed/disarmed toggle
-    - **Buzzer volume**
-    - **Red/Green LED brightness**
-    - Language selection (English / Русский)
-  - Supports **persistent storage** via LittleFS.
+    - Sensor name (also **rod ID** and AP SSID).
+    - AP password.
+    - Sensitivity (Δg threshold).
+    - Pulse duration & period.
+    - Continuous motion threshold.
+    - Armed/disarmed toggle.
+    - **Buzzer volume**.
+    - **Red/Green LED brightness**.
+    - **Language**: English / Русский.
+    - **ESP-NOW enable switch**.
+    - **Hub MAC address** (for ESP-NOW peer).
+    - **Calibrate baseline & test alarm** button.
 
 - **Language Switching**
-  - Full localization support for English and Russian.
-  - Shows a message prompting to refresh the page after switching language.
-  - Status area displays the current language.
+  - Full localization for English and Russian.
+  - Language stored in settings and applied to all UI labels.
+  - Shows a notification to refresh the page after changing language.
+  - Status area displays the currently active language.
 
 - **Battery Monitoring**
   - Reads battery voltage via an ADC divider (100 kΩ / 100 kΩ + 100 nF).
-  - Converts voltage to an approximate **battery percentage** and shows it in the Status section with a color indicator (green / yellow / red).
+  - Converts voltage to approximate **battery percentage** using a Li-ion curve.
+  - Displays both **voltage** and **%** in the Status section.
+  - LED color indicator: green / yellow / red depending on remaining charge.
 
 ---
 
-## 🧩 Hardware Components
+## 📡 ESP-NOW Bite Packet Format
 
-| Component | Description | Notes |
-|----------|-------------|-------|
-| **ESP32-S3** | Seeed Studio XIAO ESP32-S3 | Main controller (Wi-Fi + BLE + low-power) |
-| **Accelerometer** | LSM6DS3 (GY-LSM6DS3 module) | Detects vibrations and acceleration changes |
-| **LEDs** | Green and Red + MOSFET drivers | Green = Armed, Red = Motion alert, brightness via PWM |
-| **Buzzer** | Passive buzzer + MOSFET driver | Audio indication for events, volume via PWM |
-| **Button** | Single momentary button | Long press = Arm/Disarm, wake from deep sleep |
-| **Battery** | Li-ion / LiPo | Powers entire unit; ESP32-S3’s deep sleep minimizes consumption |
-| **Voltage Divider** | 2×100 kΩ + 100 nF | For battery voltage measurement on ADC pin |
+The sensor sends the following structure to the Hub:
+
+```cpp
+struct BitePacket {
+  char    rodName[16];   // Rod identifier
+  uint8_t eventType;     // 1 = short, 2 = continuous, 3 = low battery
+  uint8_t batteryPct;    // Rod battery percentage 0–100%
+  float   deltaG;        // Vibration intensity (Δg)
+};
+```
+### Bite Packet Fields
+
+- **`rodName`** – sensor name / rod ID (from web UI, also AP SSID).
+- **`eventType`**:
+  - `1` – Short/first vibration  
+  - `2` – Continuous vibration (longer motion)  
+  - `3` – Low-battery warning
+- **`batteryPct`** – battery level 0–100 %.  
+- **`deltaG`** – difference from baseline magnitude, used to quantify bite intensity.
+
+ESP-NOW functionality uses the **built-in ESP32 `esp_now` API**, no extra library required.
 
 ---
 
-## 📦 Required Libraries
+### 🧩 Hardware Components
+
+| Component         | Description                      | Notes                                                         |
+|------------------|----------------------------------|--------------------------------------------------------------|
+| **ESP32-S3**     | Seeed Studio XIAO ESP32-S3       | Main controller (Wi-Fi, BLE, ESP-NOW, deep sleep)            |
+| **Accelerometer**| LSM6DS3 (GY-LSM6DS3 module)      | Detects vibrations and acceleration magnitude changes        |
+| **LEDs**         | Green and Red + MOSFET drivers   | Green = Armed, Red = Motion alert, brightness via PWM        |
+| **Buzzer**       | Passive buzzer + MOSFET driver   | Audio indication for events, volume via PWM                  |
+| **Button**       | Single momentary button          | Long press = Arm/Disarm, also wake from deep sleep          |
+| **Battery**      | Li-ion / LiPo                    | Powers the unit; deep sleep minimizes consumption            |
+| **Voltage Divider** | 2×100 kΩ + 100 nF             | For battery voltage measurement on ADC pin                   |
+
+---
+
+### 📦 Required Libraries
 
 Make sure the following libraries are installed (PlatformIO or Arduino IDE):
 
-| Library | Repository / Notes |
-|--------|---------------------|
-| **Adafruit LSM6DS** | `adafruit/Adafruit LSM6DS` – IMU driver (LSM6DS3/LSM6DSOX family) |
-| **Adafruit Unified Sensor** | `adafruit/Adafruit Unified Sensor` – required by Adafruit IMU |
-| **Adafruit BusIO** | `adafruit/Adafruit BusIO` – required by Adafruit IMU |
-| [**SettingsGyver**](https://github.com/GyverLibs/Settings) | Web configuration UI |
-| [**GyverDBFile (GyverDB)**](https://github.com/GyverLibs/GyverDB) | Persistent storage on LittleFS |
-| [**ENCButton** (optional)](https://github.com/GyverLibs/EncButton) | For more advanced button handling (not required in current version) |
-| [**GyverLibs Core**](https://github.com/GyverLibs/) | Base dependency collection |
+| Library                    | Repository / Notes                                                   |
+|---------------------------|----------------------------------------------------------------------|
+| **Adafruit LSM6DS**       | `adafruit/Adafruit LSM6DS` – IMU driver (LSM6DS3/LSM6DSOX family)   |
+| **Adafruit Unified Sensor** | `adafruit/Adafruit Unified Sensor` – required by Adafruit IMU      |
+| **Adafruit BusIO**        | `adafruit/Adafruit BusIO` – required by Adafruit IMU                |
+| **SettingsGyver**         | Web configuration UI builder                                        |
+| **GyverDBFile (GyverDB)** | Persistent storage on LittleFS                                      |
+| **ENCButton (optional)**  | For more advanced button handling (not required in current firmware)|
+| **GyverLibs Core**        | Base dependency collection                                          |
+
+> ESP-NOW is part of the **ESP32 Arduino core**, no separate library is required.
 
 ---
 
-## ⚙️ Pinout (Seeed XIAO ESP32-S3)
+### ⚙️ Pinout (Seeed XIAO ESP32-S3)
 
-| Function | Pin | Notes |
-|---------|-----|-------|
-| **LED Green (PWM)** | D1 (GPIO2) | MOSFET gate, brightness via PWM |
-| **LED Red (PWM)** | D2 (GPIO3) | MOSFET gate, brightness via PWM |
-| **Buzzer (PWM)** | D8 (GPIO9) | MOSFET gate, volume via PWM |
-| **Button** | D4 (GPIO4) | Active LOW, wake from deep sleep |
-| **I²C SDA** | D4 (GPIO4) | Connected to GY-LSM6DS3 SDA (per schematic) |
-| **I²C SCL** | D5 (GPIO5) | Connected to GY-LSM6DS3 SCL (per schematic) |
-| **VBAT sense** | D0 (GPIO1 / ADC1_CH0) | Through 100 kΩ / 100 kΩ divider + 100 nF to GND |
-| **Power** | 3.3 V | From regulator / battery system |
-| **Ground** | GND | Common ground |
+| Function           | Pin                     | Notes                                                   |
+|--------------------|------------------------|---------------------------------------------------------|
+| **LED Green (PWM)**| D1 (GPIO2)             | MOSFET gate, brightness via PWM                        |
+| **LED Red (PWM)**  | D2 (GPIO3)             | MOSFET gate, brightness via PWM                        |
+| **Buzzer (PWM)**   | D8 (GPIO9)             | MOSFET gate, volume via PWM                            |
+| **Button**         | D4 (GPIO4)             | Active LOW, wake from deep sleep (EXT0)                |
+| **I²C SDA**        | D4 (GPIO4)             | Connected to GY-LSM6DS3 SDA (per schematic)            |
+| **I²C SCL**        | D5 (GPIO5)             | Connected to GY-LSM6DS3 SCL (per schematic)            |
+| **VBAT sense**     | D0 (GPIO1 / ADC1_CH0)  | Through 100 kΩ / 100 kΩ divider + 100 nF to GND        |
+| **Power**          | 3.3 V                  | From regulator / battery system                        |
+| **Ground**         | GND                    | Common ground                                          |
 
-*(If you wire SDA/SCL differently, adjust in code or board schematic accordingly.)*
-
----
-
-## 🌐 Wi-Fi Configuration
-
-- The ESP creates an **Access Point** using the configured sensor name (SSID) and password.
-- Default SSID: `BiteSensor`
-- Default password: *(empty)*
-- You can open the web UI by visiting `http://192.168.4.1`.
+> Adjust SDA/SCL in code if your PCB uses different pins.
 
 ---
 
-## 🖥️ Web Interface Overview
+### 🌐 Wi-Fi Configuration
 
-| Section | Controls |
-|--------|----------|
-| **General** | Language dropdown (English / Русский), **Buzzer volume slider**, **Red LED brightness slider**, **Green LED brightness slider** |
-| **Sensor** | Sensitivity (Δg), Pulse Duration, Pulse Period, Continuous Threshold, Armed/Disarmed switch |
-| **Wi-Fi Settings** | AP Name (SSID), Password, Save & Restart (reboots to apply Wi-Fi changes) |
-| **Status** | Armed state, Accelerometer status, Active language, Battery level (%, V, color), Δg value, Alerts count, Uptime (seconds) |
+The ESP creates an **Access Point** using the configured Sensor name as SSID and configured password.
 
----
+- **Default SSID:** `BiteSensor`  
+- **Default password:** *(empty)*  
 
-## 💤 Deep Sleep Logic
+Access the web UI at: `http://192.168.4.1`
 
-- When **Disarmed**:
-  - Keeps the AP active for a **3-minute configuration grace period**.
-  - If **no Wi-Fi clients** are connected after that period, automatically enters **deep sleep**.
-- Wake-up trigger: **Button press** (active LOW, EXT0 wake).
+#### AP Behavior in Modes
 
----
+**DISARMED:**
 
-## 📘 Default Behavior Summary
+- AP is always ON during the **3-minute grace period**.  
+- If no client remains connected → device enters **deep sleep**.
 
-| State | LED | Buzzer | Action |
-|-------|-----|--------|--------|
-| **Armed** | Green ON (brightness from slider) | 1 long beep (volume from slider) | Ready for motion detection |
-| **Disarmed** | Green OFF | 2 short beeps | Enters deep sleep after grace period if no clients |
-| **Motion Detected (short)** | Red blink (brightness from slider) | Short beep | Quick vibration |
-| **Continuous Motion** | Red pulsing | Repeated beeps | Sustained vibration |
+**ARMED:**
+
+- AP remains ON for **2 minutes** after arming for quick adjustments.  
+- After that it is disabled to save power; **ESP-NOW can still operate**.
 
 ---
 
-## 🔋 Power Efficiency
+### 🖥️ Web Interface Overview
 
-- Deep Sleep current: ~10–20 µA (depends on board and peripherals).
-- Active mode: ~60–80 mA (Wi-Fi enabled, IMU active).
-- PWM-driven LEDs and buzzer allow reducing brightness/volume to save extra power at night.
-
----
-
-## 🧪 Testing
-
-1. Power the board → it starts in **Disarmed** mode.  
-2. Long press the button → **Armed** (green LED ON).  
-3. Shake the accelerometer or rod → buzzer + red LED pulse.  
-4. Adjust buzzer volume and LED brightness in the **General** tab of the web UI and test again.  
-5. Long press again → **Disarmed** → two short beeps → after 3 minutes (if no clients) the device goes to deep sleep.
+| Section        | Controls / Info                                                                                               |
+|----------------|---------------------------------------------------------------------------------------------------------------|
+| **General**    | Language dropdown (English / Русский), Buzzer volume slider, Red LED brightness slider, Green LED brightness slider, **“Calibrate baseline & test alarm”** button |
+| **Sensor**     | Sensitivity (Δg), Short pulse duration, Pulse period, Continuous motion threshold, Armed/Disarmed switch     |
+| **ESP-NOW**    | ESP-NOW enable switch, Hub MAC address input                                                                  |
+| **Wi-Fi Settings** | Sensor name (AP SSID), AP password, **Save & Restart** button (reboots to apply new SSID/password)      |
+| **Status**     | Armed state, Accelerometer status, Active language, Battery level (%, V, color), Δg current value, Alerts counter, Uptime (seconds) |
 
 ---
 
-## 🧠 Developer Notes
+### 💤 Deep Sleep Logic
 
-- Built and tested with:
-  - PlatformIO
-  - ESP32 Arduino Core 2.x
+**In DISARMED mode:**
 
-Example `platformio.ini`:
+- AP is active for **3 minutes** after boot or disarm.  
+- If `WiFi.softAPgetStationNum() == 0` **and** grace period expired → enter **deep sleep**.
+
+**Wake up from deep sleep:**
+
+- Button press (active-LOW, EXT0 wake).
+
+**In ARMED mode:**
+
+- AP is turned off after **2 minutes**.  
+- ESP-NOW stays available (if enabled), or Wi-Fi can be completely turned off if ESP-NOW is disabled.
+
+---
+
+### 📘 Default Behavior Summary
+
+| State                 | LED(s)                  | Buzzer                         | Notes                                 |
+|-----------------------|-------------------------|---------------------------------|---------------------------------------|
+| **Power-up / DISARMED** | Green OFF             | 2 short beeps on disarm        | AP ON, can configure                  |
+| **ARMED**             | Green ON (PWM)         | 1 long beep                    | Motion detection active               |
+| **Short vibration**   | Red flash (PWM)        | Short beep                     | Sends ESP-NOW `eventType = 1`         |
+| **Continuous vibration** | Repeated red flashes| Periodic beeps                 | Sends ESP-NOW `eventType = 2`         |
+| **Low battery (threshold)** | Status shows low %, red color | (Optional) same as normal use | Sends ESP-NOW `eventType = 3`         |
+| **DISARMED + idle**   | Green OFF              | Silent                         | After 3 min → deep sleep              |
+
+---
+
+### 🔋 Power Efficiency
+
+- **Deep sleep current:** depends on XIAO ESP32-S3 and peripherals (~tens of µA typical).  
+- **Active mode:** controlled by CPU frequency (80 MHz) and Wi-Fi/ESP-NOW usage.  
+- PWM brightness and buzzer volume can be reduced at night to save power and noise.
+
+---
+
+### 🧪 Testing Scenario
+
+1. Power the board → it starts (according to stored state), usually in **DISARMED** with AP active.  
+2. Open Wi-Fi list on phone, connect to sensor AP (e.g., `BiteSensor`).  
+3. Open `http://192.168.4.1` → configure:
+   - Name, password, sensitivity, ESP-NOW, Hub MAC, etc.  
+4. Press **“Calibrate baseline & test alarm”**:
+   - Sensor recalibrates baseline.  
+   - Short local beep + red LED flash.  
+5. Long-press button → **ARMED**:
+   - Green LED ON, long beep.  
+   - AP available for 2 minutes, then turns off.  
+6. Move/shake the rod:
+   - Short or continuous pulses on buzzer + red LED.  
+   - ESP-NOW packets sent to hub.  
+7. Long-press again → **DISARMED**:
+   - Two short beeps, AP ON again.  
+   - After 3 minutes of inactivity → deep sleep.
+
+---
+
+### 🧠 Developer Notes
+
+Built and tested with:
+
+- **PlatformIO**  
+- **ESP32 Arduino Core 2.x** (XIAO ESP32-S3)  
+
+Uses **LittleFS** for persistent DB (`/config.db`).
+
+**Example `platformio.ini`:**
 
 ```ini
 [platformio]
@@ -206,3 +310,5 @@ lib_deps =
   adafruit/Adafruit LSM6DS        ; IMU (LSM6DS3 / LSM6DS33 / LSM6DSOX)
   adafruit/Adafruit Unified Sensor
   adafruit/Adafruit BusIO
+
+```
