@@ -103,7 +103,7 @@ struct BitePacket {
   uint8_t batteryPct;    // Rod battery percentage 0–100%
   float   deltaG;        // Vibration intensity (Δg)
 };
-// 
+```
 
 ----
 
