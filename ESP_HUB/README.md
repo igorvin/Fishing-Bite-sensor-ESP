@@ -152,7 +152,9 @@ Optional beeper / LED:
 ---
 
 ## 🔄 System Architecture
+
 ### 1.Rod Sensor (ESP32 + accelerometer)
+
      Measures vibration via IMU (e.g., LSM6DS3 / BMI160 / etc.)
      Detects short and continuous bites based on Δg and time
      Monitors its own battery
