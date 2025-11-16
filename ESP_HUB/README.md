@@ -135,6 +135,8 @@ Can be used by the Hub to:
 Last measured vibration intensity in Δg (difference from baseline gravity).
 Useful for debugging, tuning sensitivity, or showing how strong the bite was.
 
+---
+
 ## 🔧 Hardware Summary
 
 Hub MCU: Seeed Studio XIAO ESP32-S3
@@ -146,6 +148,8 @@ Battery sensing:
 Optional beeper / LED:
  - Can be added to signal alerts with sound and/or light
  -Driven via transistor/MOSFET from a GPIO pin
+
+---
 
 ## 🔄 System Architecture
 ### 1.Rod Sensor (ESP32 + accelerometer)
@@ -161,6 +165,8 @@ Optional beeper / LED:
      - Updates OLED display accordingly
      - Optionally drives a buzzer/LED
 
+---
+
 ## 🧪 Testing & Debugging
 
 Use Serial Monitor (115200 baud) to:
@@ -169,6 +175,8 @@ Use Serial Monitor (115200 baud) to:
  - Verify that low-battery alerts (eventType = 3) are received correctly
 Use one rod sensor first to test range and reliability
 Add more rods once basic communication is stable
+
+---
 
 ## 📁 Project Structure (recommended)
 
