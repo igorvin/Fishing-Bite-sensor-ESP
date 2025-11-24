@@ -4,6 +4,10 @@
   - Shows rodName (rod ID) full-screen on OLED
   - Shows HUB MAC + battery % with MP3-style icon
   - Battery friendly: CPU 80 MHz, WiFi sleep, OLED dim/off
+
+  Tuned for:
+    - Seeed XIAO ESP32-S3
+    - Seeed XIAO ESP32C6
 ********************************************************/
 
 #include <Arduino.h>
@@ -14,6 +18,10 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
+#if !defined(ARDUINO_XIAO_ESP32S3) && !defined(ARDUINO_XIAO_ESP32C6)
+#warning "This sketch is tuned for Seeed XIAO ESP32-S3 / ESP32C6. Check pin mappings if using another board."
+#endif
+
 // =======================
 // Display config (SSD1306 128x64 I2C)
 // =======================
@@ -22,11 +30,16 @@
 #define OLED_RESET    -1      // shared reset
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
+// I2C pins for XIAO ESP32-S3 / ESP32C6
+#define I2C_SDA_PIN   D4      // GPIO22 on XIAO ESP32C6
+#define I2C_SCL_PIN   D5      // GPIO23 on XIAO ESP32C6
+
 // =======================
 // Battery ADC config (HUB)
-// Adjust pin & divider to your board
+// Adjust divider to your board
 // =======================
-#define VBAT_PIN        34        // <--- CHANGE if your ADC pin is different
+// On XIAO boards, A0 (D0) is an ADC pin connected via your external divider
+#define VBAT_PIN        A0    // D0 (ADC)
 const float    VBAT_VREF      = 3.30f;  // ADC reference
 const float    VBAT_DIV       = 2.00f;  // 100k/100k divider
 const float    VBAT_CAL       = 1.00f;  // calibration factor
@@ -43,7 +56,7 @@ uint32_t lastBatMs  = 0;
 // =======================
 struct __attribute__((packed)) BitePacket {
   char    rodName[16];
-  uint8_t eventType;     // 1 = short / first, 2 = continuous
+  uint8_t eventType;     // 1 = short / first, 2 = continuous, 3 = low battery
   uint8_t batteryPct;    // rod battery, 0..100 %
   float   deltaG;        // Δg at moment of event
 };
@@ -209,7 +222,7 @@ void showAlertScreen(const String& rodName) {
   display.getTextBounds(rodName, 0, 0, &x1, &y1, &w, &h);
 
   int16_t x = (SCREEN_WIDTH - w) / 2;
-  int16_t y = (SCREEN_HEIGHT - h) / 2 + 8;  // небольшой сдвиг вниз
+  int16_t y = (SCREEN_HEIGHT - h) / 2 + 8;  // небольший сдвиг вниз
 
   display.setCursor(x, y);
   display.print(rodName);
@@ -245,12 +258,16 @@ void setup() {
   delay(100);
 
 #ifdef ESP32
-  // Lower CPU frequency for power saving
+  // Lower CPU frequency for power saving (S3/C6)
   setCpuFrequencyMhz(80);
 #endif
 
   // Init ADC for battery
   pinMode(VBAT_PIN, INPUT);
+  analogReadResolution(12);    // 0..4095
+
+  // Init I2C (explicit pins for XIAO)
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
 
   // Init display
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // I2C address 0x3C

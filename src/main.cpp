@@ -1,5 +1,5 @@
 /*******************************************************
-  Fishing Bite Sensor – ESP32-S3 (Seeed XIAO)
+  Fishing Bite Sensor – ESP32 (Seeed XIAO ESP32-S3 / ESP32-C6)
   - Accelerometer: LSM6DS3 (Adafruit LSM6DS library)
   - UI/Settings:   GyverDBFile + SettingsGyver
   - Storage:       LittleFS
@@ -32,20 +32,25 @@
 #include <GyverDBFile.h>
 #include <SettingsGyver.h>
 
+// Optional: gentle reminder about board
+#if !defined(ARDUINO_XIAO_ESP32S3) && !defined(ARDUINO_XIAO_ESP32C6)
+#warning "This sketch is tuned for Seeed XIAO ESP32-S3 / ESP32-C6. Check pin mappings if using another board."
+#endif
+
 // ==============================
-//            PINS (XIAO ESP32-S3)
+//            PINS (XIAO ESP32-S3 / ESP32-C6)
 // ==============================
 
-#define LED_GREEN   2          // D1 / GPIO2 (PWM via MOSFET)
-#define LED_RED     3          // D2 / GPIO3 (PWM via MOSFET)
-#define BUZZER      8          // D8 / GPIO8 or GPIO9 - check your wiring! (PWM via MOSFET)
-#define BUTTON      4          // active-LOW
+#define LED_GREEN   D8          // GPIO19 (C6/S3) via MOSFET, PWM
+#define LED_RED     D9          // GPIO20 via MOSFET, PWM
+#define BUZZER      D10         // GPIO18 via MOSFET, PWM
+#define BUTTON      D1          // D1 (GPIO1 / A1), active-LOW, RTC-capable
 
-// VBAT sense: D0 (GPIO1 / ADC1_CH0)
-#define VBAT_PIN    1          // D0 / GPIO1 / ADC1_CH0
+// VBAT sense: A0 (D0, ADC pin on XIAO ESP32-S3 / ESP32-C6)
+#define VBAT_PIN    A0          // D0
 
-#define I2C_SDA_PIN -1
-#define I2C_SCL_PIN -1
+#define I2C_SDA_PIN D4          // GPIO22 on XIAO ESP32C6
+#define I2C_SCL_PIN D5          // GPIO23 on XIAO ESP32C6
 
 // ==============================
 // LSM6DS3 CONFIG
@@ -246,7 +251,7 @@ uint16_t cfg_ledGreenPct = 100;   // green LED brightness %
 inline const LangPack& L(){ return cfg_langRu?LANG_RU:LANG_EN; }
 
 // ==============================
-// BUZZER + LED PWM HELPERS (ESP32)
+// BUZZER + LED PWM HELPERS (ESP32 family)
 // ==============================
 #ifdef ESP32
   #define BUZZER_LEDC_CH 0
@@ -517,7 +522,7 @@ void suspendUntilLongPressToArm(){
   setGreenLED(false);
   pinMode(BUTTON,INPUT_PULLUP);
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-  esp_sleep_enable_ext0_wakeup((gpio_num_t)BUTTON,0);
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)BUTTON,0);   // BUTTON = D1 / GPIO1 (RTC)
   esp_deep_sleep_start();
 }
 
@@ -752,9 +757,11 @@ void setup(){
   delay(100);
 
 #ifdef ESP32
-  // Lower CPU frequency for power saving
+  // Lower CPU frequency for ESP32-S3 / ESP32-C6 to save power
   setCpuFrequencyMhz(80);
 #endif
+
+  analogReadResolution(12);   // ADC 0..4095
 
   pwmInit();
 
@@ -811,7 +818,7 @@ void setup(){
   sett.onBuild(build);
   sett.onUpdate(update);
 
-  // I2C
+  // ---- I2C (single init) ----
   if (I2C_SDA_PIN>=0 && I2C_SCL_PIN>=0) Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
   else Wire.begin();
   Wire.setClock(100000);
