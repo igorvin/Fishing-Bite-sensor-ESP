@@ -5,7 +5,11 @@
   - Storage:       LittleFS
   - ESP-NOW:       Sends alarms to central ESP hub
   - Features:
-      * ARMED/DISARMED (long-press button)
+      * Soft power-latch:
+          - Q4 AO3407 + Q5 AO3400A + SW2 (PWR_KEY)
+          - MCU holds power via PWR_CTRL pin
+          - Long press PWR_KEY (~3 s) -> clean power OFF
+      * ARMED/DISARMED (long-press BUTTON, SW1)
       * Green LED = armed (PWM brightness)
       * Red LED + buzzer pulses on motion (PWM volume/brightness)
       * Long beep when armed, two short when disarmed
@@ -38,19 +42,27 @@
 #endif
 
 // ==============================
-//            PINS (XIAO ESP32-S3 / ESP32-C6)
+//            PINS (XIAO ESP32-C6)
 // ==============================
 
-#define LED_GREEN   D8          // GPIO19 (C6/S3) via MOSFET, PWM
-#define LED_RED     D9          // GPIO20 via MOSFET, PWM
-#define BUZZER      D10         // GPIO18 via MOSFET, PWM
-#define BUTTON      D1          // D1 (GPIO1 / A1), active-LOW, RTC-capable
+// Outputs (MOSFETs)
+#define LED_GREEN   D7          // LED_G net, GPIO17/RX
+#define LED_RED     D8          // LED_R net, GPIO19/MISO
+#define BUZZER      D9         // BUZZZ net, GPIO20/MOSI
 
-// VBAT sense: A0 (D0, ADC pin on XIAO ESP32-S3 / ESP32-C6)
-#define VBAT_PIN    A0          // D0
+// User button (SW1 – the existing ARM/DISARM button)
+#define BUTTON      D6          // if SW1 is on D6; change if needed
 
-#define I2C_SDA_PIN D4          // GPIO22 on XIAO ESP32C6
-#define I2C_SCL_PIN D5          // GPIO23 on XIAO ESP32C6
+// Soft-latch power circuit (bottom-left block)
+#define PIN_PWR_CTRL D0         // PWR_CTRL net -> Q5 gate (AO3400A)
+#define PIN_BTN_IN   D1         // BTN_IN / PWR_KEY node from latch
+
+// Battery monitor divider
+#define VBAT_PIN    D2          // Divider R9/R10 -> D2/A2/ADC
+
+// I2C for LSM6DS3
+#define I2C_SDA_PIN D4          // SDA
+#define I2C_SCL_PIN D5          // SCL
 
 // ==============================
 // LSM6DS3 CONFIG
@@ -59,9 +71,13 @@ const uint8_t LSM6_ADDR         = 0x6A;      // change to 0x6B if needed
 const float   MS2_PER_G         = 9.80665f;  // m/s^2 per g
 
 const uint8_t  TRIGGER_SAMPLES    = 3;
-const uint16_t LONG_PRESS_MS      = 1000;
+const uint16_t LONG_PRESS_MS      = 1000;    // BUTTON (SW1) long press for ARM/DISARM
 const uint16_t DEBOUNCE_MS        = 30;
 const uint16_t SAMPLE_INTERVAL_MS = 10;
+
+// --- Power button (BTN_IN) timings ---
+const uint32_t PWR_DEBOUNCE_MS    = 50;
+const uint32_t PWR_LONG_PRESS_MS  = 3000;    // ~3s for power OFF
 
 // Time windows
 const uint32_t DISARMED_AP_GRACE_MS = 3UL * 60UL * 1000UL;   // DISARMED → AP grace
@@ -90,9 +106,17 @@ float    baselineMagG = 1.0f;
 bool     inMotion = false, pulseOn = false;
 uint32_t pulseOffAt = 0, lastPulseStart = 0;
 
-// button FSM
+// BUTTON (SW1) FSM – ARM/DISARM
 bool btnPrev = HIGH, btnIsDown = false, longFired = false;
 uint32_t btnLastChange = 0, btnDownAt = 0;
+
+// POWER BUTTON (SW2 / BTN_IN) FSM – POWER OFF
+const bool PWRBTN_ACTIVE_LEVEL = LOW; // BTN_IN is active-LOW
+bool     pwrBtnStableState   = !PWRBTN_ACTIVE_LEVEL;
+bool     pwrBtnPrevStable    = !PWRBTN_ACTIVE_LEVEL;
+uint32_t pwrBtnLastChangeMs  = 0;
+uint32_t pwrBtnPressStartMs  = 0;
+bool     pwrIgnoreFirstPress = true;  // ignore the press used to power-on
 
 // telemetry
 volatile float    g_lastDelta = 0.0f;
@@ -406,9 +430,6 @@ bool parseMac(const String& mac, uint8_t out[6]) {
 void onEspNowSent(const uint8_t *mac, esp_now_send_status_t status) {
   (void)mac;
   (void)status;
-  // Optional: debug
-  // Serial.print("ESP-NOW send status: ");
-  // Serial.println(status == ESP_NOW_SEND_SUCCESS ? "OK" : "FAIL");
 }
 
 void espNowBegin() {
@@ -472,7 +493,6 @@ inline void startPulse(uint32_t now, uint8_t eventType){
 }
 
 inline void startTestPulse() {
-  // Local test pulse: do NOT send ESP-NOW, do NOT increment alerts
   uint32_t now = millis();
   pulseOn        = true;
   lastPulseStart = now;
@@ -512,6 +532,86 @@ void recalibrateBaseline() {
     Serial.print("Baseline recalibrated: ");
     Serial.println(baselineMagG, 4);
   }
+}
+
+// ==============================
+// SOFT-LATCH POWER CONTROL HELPERS
+// ==============================
+inline void holdPower() {
+  digitalWrite(PIN_PWR_CTRL, HIGH);  // keep Q5 ON
+}
+
+inline void releasePower() {
+  digitalWrite(PIN_PWR_CTRL, LOW);   // release latch -> power OFF
+}
+
+// Called when a valid long-press on PWR_KEY is detected
+void requestPowerOff() {
+  Serial.println("Power off requested, shutting down...");
+
+  // Flush DB / filesystem, send any final packets if needed
+  db.update();
+  delay(100);
+
+  // Optionally notify hub (low priority, can be omitted)
+  // sendBitePacket(3);
+
+  // Release latch
+  releasePower();
+
+  // Wait until power actually cuts
+  while (true) {
+    delay(100);
+  }
+}
+
+// Debounced read of BTN_IN (PWR_KEY)
+bool readPwrButtonDebounced() {
+  uint32_t now = millis();
+  bool raw = digitalRead(PIN_BTN_IN);
+
+  if (raw != pwrBtnStableState) {
+    if (now - pwrBtnLastChangeMs >= PWR_DEBOUNCE_MS) {
+      pwrBtnPrevStable   = pwrBtnStableState;
+      pwrBtnStableState  = raw;
+      pwrBtnLastChangeMs = now;
+    }
+  } else {
+    pwrBtnLastChangeMs = now;
+  }
+  return pwrBtnStableState;
+}
+
+// Handles power button long-press for power OFF
+void handlePowerButton() {
+  uint32_t now = millis();
+  bool level  = readPwrButtonDebounced();
+  bool pressed = (level == PWRBTN_ACTIVE_LEVEL);
+
+  // 1) Ignore the very first press that was used to power-on
+  if (pwrIgnoreFirstPress) {
+    if (!pressed) {
+      pwrIgnoreFirstPress = false;
+      Serial.println("Power button first release detected, power-off detection armed.");
+    }
+    return;
+  }
+
+  // 2) Normal operation: detect long press
+  if (pressed) {
+    if (pwrBtnPrevStable != PWRBTN_ACTIVE_LEVEL) {
+      // just pressed
+      pwrBtnPressStartMs = now;
+    } else {
+      // still pressed, check duration
+      if (now - pwrBtnPressStartMs >= PWR_LONG_PRESS_MS) {
+        Serial.println("Power button long press -> power off");
+        requestPowerOff();
+      }
+    }
+  }
+
+  pwrBtnPrevStable = level;
 }
 
 // ==============================
@@ -727,7 +827,7 @@ void update(sets::Updater& u){
 }
 
 // ==============================
-// BUTTON HANDLER
+// BUTTON HANDLER (SW1 – ARM/DISARM)
 // ==============================
 static void handleButton(uint32_t now){
   int raw = digitalRead(BUTTON);
@@ -747,6 +847,12 @@ static void handleButton(uint32_t now){
 // SETUP
 // ==============================
 void setup(){
+  // --- Power latch pins first ---
+  pinMode(PIN_PWR_CTRL, OUTPUT);
+  holdPower();                    // latch power immediately
+
+  pinMode(PIN_BTN_IN, INPUT);     // external network already biases levels
+
   pinMode(LED_GREEN,OUTPUT);
   pinMode(LED_RED,OUTPUT);
   pinMode(BUZZER,OUTPUT);
@@ -755,6 +861,8 @@ void setup(){
 
   Serial.begin(115200);
   delay(100);
+  Serial.println();
+  Serial.println("Fishing Bite Sensor starting...");
 
 #ifdef ESP32
   // Lower CPU frequency for ESP32-S3 / ESP32-C6 to save power
@@ -846,6 +954,14 @@ void setup(){
   g_vbat_V   = readVbat();
   g_batt_pct = vbatToPercent(g_vbat_V);
   lastVbatMs = millis();
+
+  // Initialize power-button debouncer
+  uint32_t now = millis();
+  bool raw = digitalRead(PIN_BTN_IN);
+  pwrBtnStableState  = raw;
+  pwrBtnPrevStable   = raw;
+  pwrBtnLastChangeMs = now;
+  pwrIgnoreFirstPress = true;  // we powered on via long press
 }
 
 // ==============================
@@ -855,6 +971,11 @@ void loop(){
   sett.tick();
   uint32_t now = millis();
 
+  // Handle power button (PWR_KEY / BTN_IN) first –
+  // long press (~3s) will cut power via PWR_CTRL.
+  handlePowerButton();
+
+  // Handle user BUTTON (SW1) for ARM/DISARM
   handleButton(now);
   updateGreenLED();
 
