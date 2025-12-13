@@ -1,5 +1,5 @@
 /*******************************************************
-  Fishing Bite Sensor – ESP32 (Seeed XIAO ESP32-S3 / ESP32-C6)
+  Fishing Bite Sensor – ESP32 (Seeed XIAO ESP32-S3 / ESP32-C6 / ESP32-C3)
   - Accelerometer: LSM6DS3 (Adafruit LSM6DS library)
   - UI/Settings:   GyverDBFile + SettingsGyver
   - Storage:       LittleFS
@@ -27,22 +27,27 @@
 #include <Wire.h>
 #include <WiFi.h>
 #include <esp_now.h>               // --- ESP-NOW ---
+#include <esp_idf_version.h>
+#include <esp_sleep.h>
+#if ESP_IDF_VERSION_MAJOR >= 5
+  #include <esp_wifi_types.h>
+#endif
 
 // ---- LSM6DS3 (Adafruit LSM6DS) ----
 #include <Adafruit_Sensor.h>
-#include <Adafruit_LSM6DS3TRC.h>
+#include <Adafruit_LSM6DS3.h>
 
 #include <LittleFS.h>
 #include <GyverDBFile.h>
 #include <SettingsGyver.h>
 
 // Optional: gentle reminder about board
-#if !defined(ARDUINO_XIAO_ESP32S3) && !defined(ARDUINO_XIAO_ESP32C6)
-#warning "This sketch is tuned for Seeed XIAO ESP32-S3 / ESP32-C6. Check pin mappings if using another board."
+#if !defined(ARDUINO_XIAO_ESP32S3) && !defined(ARDUINO_XIAO_ESP32C6) && !defined(ARDUINO_XIAO_ESP32C3)
+#warning "This sketch is tuned for Seeed XIAO ESP32-S3 / ESP32-C6 / ESP32-C3. Check pin mappings if using another board."
 #endif
 
 // ==============================
-//            PINS (XIAO ESP32-C6)
+//            PINS (Seeed XIAO ESP32-C3)
 // ==============================
 
 // Outputs (MOSFETs)
@@ -67,7 +72,7 @@
 // ==============================
 // LSM6DS3 CONFIG
 // ==============================
-const uint8_t LSM6_ADDR         = 0x6A;      // change to 0x6B if needed
+const uint8_t LSM6_ADDR         = 0x6B;      // change to 0x6B if needed
 const float   MS2_PER_G         = 9.80665f;  // m/s^2 per g
 
 const uint8_t  TRIGGER_SAMPLES    = 3;
@@ -98,7 +103,7 @@ const int      LOW_BATT_HYSTERESIS    = 5;   // reset flag when goes above thres
 // ==============================
 // STATE
 // ==============================
-Adafruit_LSM6DS3TRC lsm6;
+Adafruit_LSM6DS3 lsm6;
 bool imuOK = false, armed = false;
 uint32_t lastSample = 0, motionStartMs = 0, bootMs = 0;
 uint8_t  consecutiveTriggers = 0;
@@ -242,19 +247,19 @@ const LangPack LANG_EN = {
 };
 
 const LangPack LANG_RU = {
-  u8"Общие",u8"Датчик",u8"Настройки Wi-Fi",u8"Статус",u8"ESP-NOW",
-  u8"Язык",u8"(Русский / English)",
-  u8"Чувствительность Δg",u8"Короткий импульс",u8"Период импульсов",u8"Порог непрерывности",u8"Охрана (веб-переключатель)",
-  u8"Имя датчика (SSID AP)",u8"Пароль AP (мин. 8 симв.)",u8"Сохранить и перезагрузить",
-  u8"Состояние",u8"Акселерометр",u8"Δg",u8"Срабатывания",u8"Время работы (с)",
-  u8"Батарея",
-  u8"Включить ESP-NOW",u8"MAC хаба (AA:BB:CC:DD:EE:FF)",u8"Калибровка базы + тест",
-  u8"ОХРАНА",u8"СНЯТО",u8"ОК",u8"ОШИБКА",
-  u8"Имя датчика / SSID 1–32 символов",
-  u8"Пароль (мин. 8 символов)",
-  u8"Сохранено. Перезагрузка для применения SSID/пароля...",
-  u8"Язык изменён. Обновите страницу.",
-  u8"Неверный формат MAC хаба"
+  "Общие","Датчик","Настройки Wi-Fi","Статус","ESP-NOW",
+  "Язык","(Русский / English)",
+  "Чувствительность Δg","Короткий импульс","Период импульсов","Порог непрерывности","Охрана (веб-переключатель)",
+  "Имя датчика (SSID AP)","Пароль AP (мин. 8 симв.)","Сохранить и перезагрузить",
+  "Состояние","Акселерометр","Δg","Срабатывания","Время работы (с)",
+  "Батарея",
+  "Включить ESP-NOW","MAC хаба (AA:BB:CC:DD:EE:FF)","Калибровка базы + тест",
+  "ОХРАНА","СНЯТО","ОК","ОШИБКА",
+  "Имя датчика / SSID 1–32 символов",
+  "Пароль (мин. 8 символов)",
+  "Сохранено. Перезагрузка для применения SSID/пароля...",
+  "Язык изменён. Обновите страницу.",
+  "Неверный формат MAC хаба"
 };
 
 String   cfg_name="BiteSensor", cfg_apPass="";
@@ -288,21 +293,33 @@ inline const LangPack& L(){ return cfg_langRu?LANG_RU:LANG_EN; }
   static bool pwmReady = false;
 
   void pwmInit() {
-    // Buzzer: 3 kHz, 10-bit
+#if ESP_IDF_VERSION_MAJOR >= 5
+    // Arduino-ESP32 v3.x (IDF5): new LEDC API
+    // Buzzer: 3 kHz, BUZZER_BITS
+    ledcAttachChannel(BUZZER, 3000, BUZZER_BITS, BUZZER_LEDC_CH);
+    ledcWriteChannel(BUZZER_LEDC_CH, 0);
+
+    // LEDs: 1 kHz, LED_BITS
+    ledcAttachChannel(LED_GREEN, 1000, LED_BITS, LED_GREEN_CH);
+    ledcAttachChannel(LED_RED,   1000, LED_BITS, LED_RED_CH);
+    ledcWriteChannel(LED_GREEN_CH, 0);
+    ledcWriteChannel(LED_RED_CH,   0);
+#else
+    // Arduino-ESP32 v2.x: classic LEDC API
     ledcSetup(BUZZER_LEDC_CH, 3000, BUZZER_BITS);
     ledcAttachPin(BUZZER, BUZZER_LEDC_CH);
-    ledcWrite(BUZZER_LEDC_CH, 0);
+    pwmWriteCh(BUZZER_LEDC_CH, 0);
 
-    // LEDs: 1 kHz, 8-bit
     ledcSetup(LED_GREEN_CH, 1000, LED_BITS);
     ledcSetup(LED_RED_CH,   1000, LED_BITS);
     ledcAttachPin(LED_GREEN, LED_GREEN_CH);
     ledcAttachPin(LED_RED,   LED_RED_CH);
     ledcWrite(LED_GREEN_CH, 0);
     ledcWrite(LED_RED_CH,   0);
+#endif
 
     pwmReady = true;
-  }
+}
 
   inline uint16_t buzzerDuty(){
     if (cfg_buzVolPct > 100) cfg_buzVolPct = 100;
@@ -314,25 +331,33 @@ inline const LangPack& L(){ return cfg_langRu?LANG_RU:LANG_EN; }
     return (uint8_t)((pct * ((1 << LED_BITS) - 1)) / 100);
   }
 
+  inline void pwmWriteCh(uint8_t ch, uint32_t duty){
+#if ESP_IDF_VERSION_MAJOR >= 5
+    ledcWriteChannel(ch, duty);
+#else
+    ledcWrite(ch, duty);
+#endif
+  }
+
   inline void buzzStart(){
     if (!pwmReady) return;
     uint16_t d = buzzerDuty();
-    ledcWrite(BUZZER_LEDC_CH, d);
+    pwmWriteCh(BUZZER_LEDC_CH, d);
   }
 
   inline void buzzStop(){
     if (!pwmReady) return;
-    ledcWrite(BUZZER_LEDC_CH, 0);
+    pwmWriteCh(BUZZER_LEDC_CH, 0);
   }
 
   inline void setGreenLED(bool on){
     if (!pwmReady) return;
-    ledcWrite(LED_GREEN_CH, on ? ledDuty(cfg_ledGreenPct) : 0);
+    pwmWriteCh(LED_GREEN_CH, on ? ledDuty(cfg_ledGreenPct) : 0);
   }
 
   inline void setRedLED(bool on){
     if (!pwmReady) return;
-    ledcWrite(LED_RED_CH, on ? ledDuty(cfg_ledRedPct) : 0);
+    pwmWriteCh(LED_RED_CH, on ? ledDuty(cfg_ledRedPct) : 0);
   }
 #else
   void pwmInit() {}
@@ -427,10 +452,17 @@ bool parseMac(const String& mac, uint8_t out[6]) {
   return true;
 }
 
+#if ESP_IDF_VERSION_MAJOR >= 5
+void onEspNowSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+  (void)info;
+  (void)status;
+}
+#else
 void onEspNowSent(const uint8_t *mac, esp_now_send_status_t status) {
   (void)mac;
   (void)status;
 }
+#endif
 
 void espNowBegin() {
   if (!espNowEnabled || espNowInited || !hubMacValid) return;
@@ -620,9 +652,23 @@ void handlePowerButton() {
 void suspendUntilLongPressToArm(){
   setRedLED(false);
   setGreenLED(false);
-  pinMode(BUTTON,INPUT_PULLUP);
+  pinMode(BUTTON, INPUT_PULLUP);
+
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-  esp_sleep_enable_ext0_wakeup((gpio_num_t)BUTTON,0);   // BUTTON = D1 / GPIO1 (RTC)
+
+#if CONFIG_IDF_TARGET_ESP32C3
+  // ESP32-C3: use GPIO wake (EXT0/EXT1 are not supported the same way)
+  uint64_t mask = 1ULL << (uint8_t)BUTTON;
+  esp_deep_sleep_enable_gpio_wakeup(mask, ESP_GPIO_WAKEUP_GPIO_LOW);
+#elif CONFIG_IDF_TARGET_ESP32C6
+  // ESP32-C6: EXT1 works
+  uint64_t mask = 1ULL << (uint8_t)BUTTON;
+  esp_sleep_enable_ext1_wakeup(mask, ESP_EXT1_WAKEUP_ANY_LOW);
+#else
+  // Classic ESP32: EXT0 is fine
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)BUTTON, 0);
+#endif
+
   esp_deep_sleep_start();
 }
 
@@ -669,9 +715,9 @@ void build(sets::Builder& b){
     b.Select(kk::langIdx, L().lblLanguage, "English\nРусский", AnyPtr(&cfg_langIdx));
     b.Label(H_langHintLbl, L().langHint);
 
-    const char* lblBuz = cfg_langRu ? u8"Громкость зуммера" : "Buzzer volume";
-    const char* lblLR  = cfg_langRu ? u8"Яркость красного светодиода" : "Red LED brightness";
-    const char* lblLG  = cfg_langRu ? u8"Яркость зелёного светодиода" : "Green LED brightness";
+    const char* lblBuz = cfg_langRu ? "Громкость зуммера" : "Buzzer volume";
+    const char* lblLR  = cfg_langRu ? "Яркость красного светодиода" : "Red LED brightness";
+    const char* lblLG  = cfg_langRu ? "Яркость зелёного светодиода" : "Green LED brightness";
 
     b.Slider(kk::buzVol,    lblBuz, 0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_buzVolPct));
     b.Slider(kk::ledRedLvl, lblLR,  0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_ledRedPct));
