@@ -22,17 +22,15 @@
       * Web "Calibrate baseline & test alarm" button
       * Automatic baseline recalibration on disarm
 
-  - NEW: Auto-disarm (anti-noise) + Smart learning
-      * Auto-disarm (master) default ON
-      * Smart-detection default ON:
-          - Every time you ARM, it runs an automatic learn:
-              10s learn NORMAL + 10s learn MOVED
-          - During learn (first 20s) bite alarms are suppressed
-          - After learn it auto-derives thresholds:
-              UP  = clamp(0.6 * maxPitchDev, 15..60) deg
-              TILT= clamp(0.6 * maxRollDev , 15..70) deg
-            If no meaningful move detected -> fallback defaults 25/35 deg
-      * If Smart-detection OFF -> manual thresholds shown in UI
+  - Auto-disarm (anti-noise) [NO SMART-LEARNING]
+      * Master enable ON/OFF
+      * Auto Detect:
+          ON  -> fixed UP=25°, TILT=35°, HOLD=120ms
+          OFF -> manual sliders UP/TILT/HOLD
+      * Improvements:
+          - ARM warmup 1.5s prevents instant false alarms
+          - Baseline orientation capture is simple & reliable
+          - Minimum time after ARM before auto-disarm can disarm
 ********************************************************/
 
 #include <Arduino.h>
@@ -83,6 +81,9 @@ const uint16_t LONG_PRESS_MS      = 1000;
 const uint16_t DEBOUNCE_MS        = 30;
 const uint16_t SAMPLE_INTERVAL_MS = 10;
 
+// ARM warmup after ARM (prevents instant false alarms)
+const uint32_t ARM_SETTLE_MS       = 1500;
+
 // --- Power button (BTN_IN) timings ---
 const uint32_t PWR_DEBOUNCE_MS    = 50;
 const uint32_t PWR_LONG_PRESS_MS  = 3000;
@@ -108,11 +109,20 @@ const int      LOW_BATT_HYSTERESIS    = 5;
 // ==============================
 Adafruit_LSM6DS3 lsm6;
 bool imuOK = false, armed = false;
+
 uint32_t lastSample = 0, motionStartMs = 0, bootMs = 0;
 uint8_t  consecutiveTriggers = 0;
 float    baselineMagG = 1.0f;
+
 bool     inMotion = false, pulseOn = false;
 uint32_t pulseOffAt = 0, lastPulseStart = 0;
+
+// ARM warmup state
+uint32_t armAtMs = 0;
+bool     armWarmup = false;
+uint16_t warmupCnt = 0;
+float    warmupSumMag = 0.0f;
+bool     gravInited = false;
 
 // BUTTON (SW1) FSM – ARM/DISARM
 bool btnPrev = HIGH, btnIsDown = false, longFired = false;
@@ -169,20 +179,6 @@ DB_KEYS(
   espNowEn, hubMac
 );
 
-// UI holders (LEDs/labels)
-#define H_stateLbl    H(stateLbl)
-#define H_deltaLbl    H(deltaLbl)
-#define H_alertsLbl   H(alertsLbl)
-#define H_uptimeLbl   H(uptimeLbl)
-#define H_stateLED    H(stateLED)
-#define H_accelLED    H(accelLED)
-#define H_accelLbl    H(accelLbl)
-#define H_langLED     H(langLED)
-#define H_langLbl     H(langLbl)
-#define H_langHintLbl H(langHintLbl)
-#define H_battLED     H(battLED)
-#define H_battLbl     H(battLbl)
-
 GyverDBFile   db(&LittleFS, "/config.db");
 SettingsGyver sett("Fishing Bite Sensor", &db);
 
@@ -236,8 +232,7 @@ const LangPack LANG_EN = {
   "Language","(English / Русский)",
   "Sensitivity \xCE\x94g","Short pulse","Pulse period","Continuous threshold","Armed (web toggle)",
   "Sensor name (AP SSID)","AP password (Min 8 chars.)","Save & Restart",
-  "State","Accelerometer","\xCE\x94g","Alerts","Uptime (s)",
-  "Battery",
+  "State","Accelerometer","\xCE\x94g","Alerts","Uptime (s)","Battery",
   "Enable ESP-NOW","Hub MAC (AA:BB:CC:DD:EE:FF)","Calibrate baseline & test alarm",
   "ARMED","DISARMED","OK","ERROR",
   "Sensor name / SSID (1..32 chars.)",
@@ -252,8 +247,7 @@ const LangPack LANG_RU = {
   "Язык","(Русский / English)",
   "Чувствительность Δg","Короткий импульс","Период импульсов","Порог непрерывности","Охрана (веб-переключатель)",
   "Имя датчика (SSID AP)","Пароль AP (мин. 8 симв.)","Сохранить и перезагрузить",
-  "Состояние","Акселерометр","Δg","Срабатывания","Время работы (с)",
-  "Батарея",
+  "Состояние","Акселерометр","Δg","Срабатывания","Время работы (с)","Батарея",
   "Включить ESP-NOW","MAC хаба (AA:BB:CC:DD:EE:FF)","Калибровка базы + тест",
   "ОХРАНА","СНЯТО","ОК","ОШИБКА",
   "Имя датчика / SSID 1–32 символов",
@@ -281,60 +275,51 @@ uint16_t cfg_ledGreenPct = 100;
 inline const LangPack& L(){ return cfg_langRu?LANG_RU:LANG_EN; }
 
 // ==============================
-// AUTO-DISARM CONFIG + LEARNING (stored with string keys)
+// AUTO-DISARM UI/DB (string keys)
 // ==============================
-// Master enable
-const char* DBK_AUTO_DISARM_EN       = "autoDisarmEn";
+const char* DBK_AUTO_DISARM_EN = "autoDisarmEn";
+const char* DBK_AUTO_DETECT    = "autoDetect";
+const char* DBK_AUTO_UP_DEG    = "autoUpDeg";
+const char* DBK_AUTO_TILT_DEG  = "autoTiltDeg";
+const char* DBK_AUTO_HOLD_MS   = "autoHoldMs";
 
-// Smart/manual
-const char* DBK_AUTO_SMART_EN        = "autoDisarmSmart";
-const char* DBK_AUTO_DISARM_UP_DEG   = "autoDisarmUpDeg";
-const char* DBK_AUTO_DISARM_TILT_DEG = "autoDisarmTiltDeg";
+bool     cfg_autoDisarmEn = true;
+bool     cfg_autoDetect   = true;     // ON = fixed params
+float    cfg_autoUpDeg    = 25.0f;    // used when autoDetect OFF
+float    cfg_autoTiltDeg  = 35.0f;    // used when autoDetect OFF
+uint16_t cfg_autoHoldMs   = 120;      // used when autoDetect OFF
 
-// Learned results (used only in Smart mode)
-const char* DBK_LEARN_UP_DEG         = "autoLearnUpDeg";
-const char* DBK_LEARN_TILT_DEG       = "autoLearnTiltDeg";
+// ==============================
+// AUTO-DISARM (simple + reliable)
+// ==============================
+// Fixed params when Auto Detect = ON
+static const float    FIX_UP_DEG   = 25.0f;
+static const float    FIX_TILT_DEG = 35.0f;
+static const uint16_t FIX_HOLD_MS  = 120;
 
-// Defaults for Smart fallback
-const float SMART_UP_DEFAULT_DEG     = 25.0f;
-const float SMART_TILT_DEFAULT_DEG   = 35.0f;
+// Minimum time after ARM before auto-disarm can disarm
+static const uint32_t AUTO_DISARM_MIN_ARM_MS = 4000;
 
-// UI/config variables
-bool  cfg_autoDisarmEn     = true;   // default ON
-bool  cfg_autoSmart        = true;   // default ON
-float cfg_autoDisarmUpDeg  = 25.0f;  // manual if Smart OFF
-float cfg_autoDisarmTiltDeg= 35.0f;  // manual if Smart OFF
+// Baseline capture requirements
+static const uint32_t BASELINE_STABLE_MS  = 600;
+static const float    BASELINE_DELTA_K    = 0.60f;
 
-// learned thresholds for Smart ON (derived each arm)
-float cfg_learnUpDeg       = SMART_UP_DEFAULT_DEG;
-float cfg_learnTiltDeg     = SMART_TILT_DEFAULT_DEG;
-
-// Orientation math
+// Orientation math state
 struct Vec3 { float x,y,z; };
-static Vec3 gravF = {0,0,1};
+static Vec3  gravF = {0,0,1};
 
-static bool  oriBaseValid = false;
-static float basePitchDeg = 0.0f;
-static float baseRollDeg  = 0.0f;
+static bool     oriBaseValid = false;
+static float    basePitchDeg = 0.0f;
+static float    baseRollDeg  = 0.0f;
+
+static uint32_t baselineStableSince = 0;
 static uint32_t moveOverSince = 0;
 
-// gravity filter + gate
+// gravity filter + mag gate
 const float    MOVE_GRAV_ALPHA = 0.94f;
-const uint32_t MOVE_HOLD_MS    = 120;
+const uint32_t MOVE_HOLD_MS_UNUSED = 120; // (we use per-mode holdMs, keep for reference)
 const float    MOVE_MAG_MIN_G  = 0.75f;
 const float    MOVE_MAG_MAX_G  = 1.25f;
-
-// Learn timing (10s + 10s)
-enum LearnState : uint8_t { LEARN_NONE=0, LEARN_NORMAL=1, LEARN_MOVED=2 };
-static LearnState g_learnState = LEARN_NONE;
-static uint32_t   g_learnStartMs = 0;
-static uint32_t   g_phaseStartMs = 0;
-
-static Vec3  g_sumN = {0,0,0};
-static uint32_t g_cntN = 0;
-
-static float g_maxPitchDev = 0.0f;
-static float g_maxRollDev  = 0.0f;
 
 // ==============================
 // BUZZER + LED PWM HELPERS (ESP32 family)
@@ -424,9 +409,10 @@ inline void shortBeep(){ buzzStart(); delay(150); buzzStop(); }
 // ==============================
 // HELPERS
 // ==============================
-inline float mag3(float x,float y,float z){return sqrtf(x*x+y*y+z*z);}
 static inline uint16_t clamp16(uint16_t v,uint16_t lo,uint16_t hi){return v<lo?lo:(v>hi?hi:v);}
 static inline float clampf(float v,float lo,float hi){return v<lo?lo:(v>hi?hi:v);}
+
+inline float mag3(float x,float y,float z){return sqrtf(x*x+y*y+z*z);}
 
 static inline float vMag(const Vec3& v){ return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z); }
 static inline float rad2deg(float r){ return r * 57.2957795f; }
@@ -436,62 +422,9 @@ static void gravityToPitchRoll(const Vec3& g, float& pitchDeg, float& rollDeg) {
   rollDeg  = rad2deg(atan2f(g.y, g.z));
 }
 
-// ==============================
-// Battery read + mapping
-// ==============================
-float readVbat() {
-  uint32_t acc = 0;
-  analogRead(VBAT_PIN);                    // dummy
-  for (int i=0;i<VBAT_SAMPLES;i++) acc += analogRead(VBAT_PIN);
-  float adc = acc / float(VBAT_SAMPLES);
-  float v = (adc / VBAT_ADC_MAX) * VBAT_VREF * VBAT_DIV * VBAT_CAL;
-  return v;
-}
-
-int vbatToPercent(float v) {
-  if      (v >= 4.18f) return 100;
-  else if (v >= 4.10f) return 90;
-  else if (v >= 3.98f) return 80;
-  else if (v >= 3.85f) return 70;
-  else if (v >= 3.80f) return 60;
-  else if (v >= 3.75f) return 50;
-  else if (v >= 3.70f) return 40;
-  else if (v >= 3.63f) return 30;
-  else if (v >= 3.55f) return 20;
-  else if (v >= 3.45f) return 10;
-  else                 return 0;
-}
-
-// ==============================
-// Wi-Fi MODES
-// ==============================
-void configureAP(const String& ssid,const String& pass){
-  WiFi.softAPdisconnect(true);
-  delay(50);
-  if (pass.length()>=8) WiFi.softAP(ssid.c_str(),pass.c_str());
-  else                  WiFi.softAP(ssid.c_str(),"");
-  delay(100);
-  Serial.printf("AP SSID: %s\n",ssid.c_str());
-  Serial.println(WiFi.softAPIP());
-}
-
-void wifiEnterConfigMode() {
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.setHostname(cfg_name.c_str());
-  configureAP(cfg_name, cfg_apPass);
-  WiFi.setSleep(true);
-}
-
-void wifiAfterArmWindow() {
-  WiFi.softAPdisconnect(true);
-  Serial.println("AP disabled after ARM window");
-
-  if (!espNowEnabled || !hubMacValid) {
-    WiFi.disconnect(true, true);
-    delay(50);
-    WiFi.mode(WIFI_OFF);
-    Serial.println("WiFi fully OFF (no ESP-NOW)");
-  }
+static inline bool accelMagOk(const Vec3& gNow) {
+  float m = vMag(gNow);
+  return (m >= MOVE_MAG_MIN_G && m <= MOVE_MAG_MAX_G);
 }
 
 // ==============================
@@ -554,8 +487,51 @@ void sendBitePacket(uint8_t eventType) {
 }
 
 // ==============================
+// Wi-Fi MODES
+// ==============================
+void configureAP(const String& ssid,const String& pass){
+  WiFi.softAPdisconnect(true);
+  delay(50);
+  if (pass.length()>=8) WiFi.softAP(ssid.c_str(),pass.c_str());
+  else                  WiFi.softAP(ssid.c_str(),"");
+  delay(100);
+  Serial.printf("AP SSID: %s\n",ssid.c_str());
+  Serial.println(WiFi.softAPIP());
+}
+
+void wifiEnterConfigMode() {
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.setHostname(cfg_name.c_str());
+  configureAP(cfg_name, cfg_apPass);
+  WiFi.setSleep(true);
+}
+
+void wifiAfterArmWindow() {
+  WiFi.softAPdisconnect(true);
+  Serial.println("AP disabled after ARM window");
+
+  if (!espNowEnabled || !hubMacValid) {
+    WiFi.disconnect(true, true);
+    delay(50);
+    WiFi.mode(WIFI_OFF);
+    Serial.println("WiFi fully OFF (no ESP-NOW)");
+  }
+}
+
+// ==============================
 // ALERT PULSES / LEDS
 // ==============================
+inline uint16_t buzzerDuty();
+inline uint8_t  ledDuty(uint16_t pct);
+
+inline void stopPulse(){
+  pulseOn=false;
+  buzzStop();
+  setRedLED(false);
+}
+
+inline void updateGreenLED(){ setGreenLED(armed); }
+
 inline void startPulse(uint32_t now, uint8_t eventType){
   pulseOn        = true;
   lastPulseStart = now;
@@ -575,16 +551,34 @@ inline void startTestPulse() {
   buzzStart();
 }
 
-inline void stopPulse(){
-  pulseOn=false;
-  buzzStop();
-  setRedLED(false);
+// ==============================
+// Battery read + mapping
+// ==============================
+float readVbat() {
+  uint32_t acc = 0;
+  analogRead(VBAT_PIN);                    // dummy
+  for (int i=0;i<VBAT_SAMPLES;i++) acc += analogRead(VBAT_PIN);
+  float adc = acc / float(VBAT_SAMPLES);
+  float v = (adc / VBAT_ADC_MAX) * VBAT_VREF * VBAT_DIV * VBAT_CAL;
+  return v;
 }
 
-inline void updateGreenLED(){ setGreenLED(armed); }
+int vbatToPercent(float v) {
+  if      (v >= 4.18f) return 100;
+  else if (v >= 4.10f) return 90;
+  else if (v >= 3.98f) return 80;
+  else if (v >= 3.85f) return 70;
+  else if (v >= 3.80f) return 60;
+  else if (v >= 3.75f) return 50;
+  else if (v >= 3.70f) return 40;
+  else if (v >= 3.63f) return 30;
+  else if (v >= 3.55f) return 20;
+  else if (v >= 3.45f) return 10;
+  else                 return 0;
+}
 
 // ==============================
-// BASELINE RECALIBRATION
+// BASELINE RECALIBRATION (Δg baseline)
 // ==============================
 void recalibrateBaseline() {
   if (!imuOK) return;
@@ -664,109 +658,43 @@ void handlePowerButton() {
 }
 
 // ==============================
-// AUTO-DISARM: learning + trigger
+// AUTO-DISARM: functions
 // ==============================
-static inline bool accelMagOk(const Vec3& gNow) {
-  float m = vMag(gNow);
-  return (m >= MOVE_MAG_MIN_G && m <= MOVE_MAG_MAX_G);
-}
-
-static void learnStart(uint32_t now) {
-  g_learnState   = LEARN_NORMAL;
-  g_learnStartMs = now;
-  g_phaseStartMs = now;
-
-  g_sumN = {0,0,0};
-  g_cntN = 0;
-
-  g_maxPitchDev = 0.0f;
-  g_maxRollDev  = 0.0f;
-
+static void resetAutoDisarm() {
   oriBaseValid = false;
+  baselineStableSince = 0;
   moveOverSince = 0;
-
-  shortBeep();
-  Serial.println("AUTO-LEARN: started (10s NORMAL + 10s MOVED)");
 }
 
-static void learnFinish(bool movedMeaningful) {
-  if (movedMeaningful) {
-    cfg_learnUpDeg   = clampf(0.60f * g_maxPitchDev, 15.0f, 60.0f);
-    cfg_learnTiltDeg = clampf(0.60f * g_maxRollDev,  15.0f, 70.0f);
-    Serial.printf("AUTO-LEARN: derived UP=%.1f TILT=%.1f (maxP=%.1f maxR=%.1f)\n",
-                  cfg_learnUpDeg, cfg_learnTiltDeg, g_maxPitchDev, g_maxRollDev);
-  } else {
-    cfg_learnUpDeg   = SMART_UP_DEFAULT_DEG;
-    cfg_learnTiltDeg = SMART_TILT_DEFAULT_DEG;
-    Serial.println("AUTO-LEARN: no meaningful moved detected -> fallback UP=25 TILT=35");
-  }
+static void autoDisarmCaptureBaseline(uint32_t now, const Vec3& gNow, float dDelta) {
+  if (!cfg_autoDisarmEn || !armed) return;
+  if (oriBaseValid) return;
+  if (armWarmup) { baselineStableSince = 0; return; }
 
-  db.set(DBK_LEARN_UP_DEG,   cfg_learnUpDeg);
-  db.set(DBK_LEARN_TILT_DEG, cfg_learnTiltDeg);
+  bool stable = accelMagOk(gNow) && (dDelta < (cfg_deltaG * BASELINE_DELTA_K));
 
-  shortBeep(); delay(80); shortBeep();
-  g_learnState = LEARN_NONE;
-}
-
-static void learnTick(uint32_t now, const Vec3& gNow, float dDelta) {
-  bool stable = accelMagOk(gNow) && (dDelta < (cfg_deltaG * 0.60f));
-
-  if (g_learnState == LEARN_NORMAL) {
-    if (stable) {
-      g_sumN.x += gNow.x;
-      g_sumN.y += gNow.y;
-      g_sumN.z += gNow.z;
-      g_cntN++;
-    }
-
-    if (now - g_phaseStartMs >= 10000UL) {
-      Vec3 avg = gNow;
-      if (g_cntN >= 30) {
-        avg.x = g_sumN.x / (float)g_cntN;
-        avg.y = g_sumN.y / (float)g_cntN;
-        avg.z = g_sumN.z / (float)g_cntN;
-      }
-
-      gravityToPitchRoll(avg, basePitchDeg, baseRollDeg);
-      oriBaseValid = true;
-      moveOverSince = 0;
-
-      g_learnState = LEARN_MOVED;
-      g_phaseStartMs = now;
-
-      Serial.printf("AUTO-LEARN: NORMAL done (cnt=%lu) basePitch=%.1f baseRoll=%.1f\n",
-                    (unsigned long)g_cntN, basePitchDeg, baseRollDeg);
-      shortBeep();
-    }
+  if (!stable) {
+    baselineStableSince = 0;
     return;
   }
 
-  if (g_learnState == LEARN_MOVED) {
-    if (oriBaseValid && accelMagOk(gNow)) {
-      float pitchDeg, rollDeg;
-      gravityToPitchRoll(gNow, pitchDeg, rollDeg);
+  if (baselineStableSince == 0) baselineStableSince = now;
 
-      float dP = fabsf(pitchDeg - basePitchDeg);
-      float dR = fabsf(rollDeg  - baseRollDeg);
-
-      if (dP > g_maxPitchDev) g_maxPitchDev = dP;
-      if (dR > g_maxRollDev)  g_maxRollDev  = dR;
-    }
-
-    if (now - g_phaseStartMs >= 10000UL) {
-      bool meaningful = (g_maxPitchDev >= 12.0f) || (g_maxRollDev >= 12.0f);
-      learnFinish(meaningful);
-    }
-    return;
+  if (now - baselineStableSince >= BASELINE_STABLE_MS) {
+    gravityToPitchRoll(gNow, basePitchDeg, baseRollDeg);
+    oriBaseValid = true;
+    moveOverSince = 0;
+    Serial.printf("AUTO-DISARM: baseline captured pitch=%.1f roll=%.1f\n", basePitchDeg, baseRollDeg);
   }
 }
 
 static bool checkAutoDisarmMove(uint32_t now, const Vec3& gNow) {
-  if (!cfg_autoDisarmEn) return false;
-  if (!armed) return false;
-
-  if (g_learnState != LEARN_NONE) return false;
+  if (!cfg_autoDisarmEn || !armed) return false;
   if (!oriBaseValid) return false;
+  if (armWarmup) return false;
+
+  // minimum time after ARM
+  if (now - armAtMs < AUTO_DISARM_MIN_ARM_MS) return false;
 
   if (!accelMagOk(gNow)) {
     moveOverSince = 0;
@@ -774,12 +702,16 @@ static bool checkAutoDisarmMove(uint32_t now, const Vec3& gNow) {
   }
 
   float upTh, tiltTh;
-  if (cfg_autoSmart) {
-    upTh   = cfg_learnUpDeg;
-    tiltTh = cfg_learnTiltDeg;
+  uint16_t holdMs;
+
+  if (cfg_autoDetect) {
+    upTh   = FIX_UP_DEG;
+    tiltTh = FIX_TILT_DEG;
+    holdMs = FIX_HOLD_MS;
   } else {
-    upTh   = cfg_autoDisarmUpDeg;
-    tiltTh = cfg_autoDisarmTiltDeg;
+    upTh   = clampf(cfg_autoUpDeg,   0.0f, 90.0f);
+    tiltTh = clampf(cfg_autoTiltDeg, 0.0f, 90.0f);
+    holdMs = clamp16(cfg_autoHoldMs, 50, 2000);
     if (upTh <= 0.0f && tiltTh <= 0.0f) return false;
   }
 
@@ -794,10 +726,11 @@ static bool checkAutoDisarmMove(uint32_t now, const Vec3& gNow) {
 
   if (overUp || overTilt) {
     if (moveOverSince == 0) moveOverSince = now;
-    if (now - moveOverSince >= MOVE_HOLD_MS) return true;
+    if (now - moveOverSince >= holdMs) return true;
   } else {
     moveOverSince = 0;
   }
+
   return false;
 }
 
@@ -839,12 +772,20 @@ void setArmed(bool v,bool deepSleep){
 
     if (espNowEnabled && hubMacValid) espNowBegin();
 
-    oriBaseValid = false;
-    moveOverSince = 0;
+    // Auto-disarm reset
+    resetAutoDisarm();
 
-    if (cfg_autoDisarmEn && cfg_autoSmart) {
-      learnStart(millis());
-    }
+    // ARM warmup
+    armAtMs = millis();
+    armWarmup = true;
+    warmupCnt = 0;
+    warmupSumMag = 0.0f;
+    gravInited = false;
+
+    // extra safety
+    stopPulse();
+    inMotion = false;
+    consecutiveTriggers = 0;
 
   } else {
     recalibrateBaseline();
@@ -855,7 +796,7 @@ void setArmed(bool v,bool deepSleep){
     inMotion = false;
     consecutiveTriggers = 0;
 
-    g_learnState = LEARN_NONE;
+    armWarmup = false;
 
     shortBeep(); delay(80); shortBeep();
     wifiEnterConfigMode();
@@ -872,10 +813,25 @@ bool testAlarm_f  = false;
 
 // UI-only IDs (must be size_t)
 static const size_t UI_AUTO_DISARM_EN   = 1300;
-static const size_t UI_AUTO_SMART       = 1301;
+static const size_t UI_AUTO_DETECT      = 1301;
 static const size_t UI_AUTO_UP          = 1302;
 static const size_t UI_AUTO_TILT        = 1303;
-static const size_t UI_AUTO_INFO        = 1304;
+static const size_t UI_AUTO_HOLD        = 1304;
+static const size_t UI_AUTO_INFO        = 1305;
+
+// UI holders
+#define H_stateLbl    H(stateLbl)
+#define H_deltaLbl    H(deltaLbl)
+#define H_alertsLbl   H(alertsLbl)
+#define H_uptimeLbl   H(uptimeLbl)
+#define H_stateLED    H(stateLED)
+#define H_accelLED    H(accelLED)
+#define H_accelLbl    H(accelLbl)
+#define H_langLED     H(langLED)
+#define H_langLbl     H(langLbl)
+#define H_langHintLbl H(langHintLbl)
+#define H_battLED     H(battLED)
+#define H_battLbl     H(battLbl)
 
 void build(sets::Builder& b){
   using namespace sets;
@@ -911,19 +867,22 @@ void build(sets::Builder& b){
     b.Switch(UI_AUTO_DISARM_EN, lblAuto, &cfg_autoDisarmEn);
 
     if (cfg_autoDisarmEn) {
-      const char* lblSmart = "Smart-detection";
-      b.Switch(UI_AUTO_SMART, lblSmart, &cfg_autoSmart);
+      const char* lblAD = cfg_langRu ? "Авто-детект (фикс. параметры)" : "Auto Detect (fixed params)";
+      b.Switch(UI_AUTO_DETECT, lblAD, &cfg_autoDetect);
 
-      if (!cfg_autoSmart) {
-        const char* lblUp   = cfg_langRu ? "Auto-disarm UP (градусы, 0=выкл.)"   : "Auto-disarm UP (deg, 0=OFF)";
-        const char* lblTilt = cfg_langRu ? "Auto-disarm TILT (градусы, 0=выкл.)" : "Auto-disarm TILT (deg, 0=OFF)";
-        b.Slider(UI_AUTO_UP,   lblUp,   0.0f, 90.0f, 1.0f, "deg", AnyPtr(&cfg_autoDisarmUpDeg));
-        b.Slider(UI_AUTO_TILT, lblTilt, 0.0f, 90.0f, 1.0f, "deg", AnyPtr(&cfg_autoDisarmTiltDeg));
-      } else {
-        String info = String("Learn each ARM: 10s+10s, using UP=") + String(cfg_learnUpDeg,0) +
-                      "°, TILT=" + String(cfg_learnTiltDeg,0) + "°";
-        // ✅ FIX: Label must use numeric ID, not "smartInfo" string
+      if (cfg_autoDetect) {
+        String info = String("Fixed: UP=") + String((int)FIX_UP_DEG) +
+                      "°, TILT=" + String((int)FIX_TILT_DEG) +
+                      "°, HOLD=" + String((int)FIX_HOLD_MS) + "ms";
         b.Label(UI_AUTO_INFO, info);
+      } else {
+        const char* lblUp   = cfg_langRu ? "UP (градусы, 0=выкл.)"   : "UP (deg, 0=OFF)";
+        const char* lblTilt = cfg_langRu ? "TILT (градусы, 0=выкл.)" : "TILT (deg, 0=OFF)";
+        const char* lblHold = cfg_langRu ? "HOLD (мс)"               : "HOLD (ms)";
+
+        b.Slider(UI_AUTO_UP,   lblUp,   0.0f, 90.0f, 1.0f, "deg", AnyPtr(&cfg_autoUpDeg));
+        b.Slider(UI_AUTO_TILT, lblTilt, 0.0f, 90.0f, 1.0f, "deg", AnyPtr(&cfg_autoTiltDeg));
+        b.Slider(UI_AUTO_HOLD, lblHold, 50.0f, 2000.0f, 10.0f, "ms", AnyPtr(&cfg_autoHoldMs));
       }
     }
   }
@@ -966,20 +925,19 @@ void update(sets::Updater& u){
   db.set(kk::ledRedLvl,   (int)cfg_ledRedPct);
   db.set(kk::ledGreenLvl, (int)cfg_ledGreenPct);
 
-  // Persist auto-disarm switches + manual thresholds (string keys)
-  cfg_autoDisarmUpDeg   = clampf(cfg_autoDisarmUpDeg,   0.0f, 90.0f);
-  cfg_autoDisarmTiltDeg = clampf(cfg_autoDisarmTiltDeg, 0.0f, 90.0f);
+  // Auto-disarm settings
+  db.set(DBK_AUTO_DISARM_EN, (int)(cfg_autoDisarmEn ? 1 : 0));
+  db.set(DBK_AUTO_DETECT,    (int)(cfg_autoDetect ? 1 : 0));
 
-  db.set(DBK_AUTO_DISARM_EN,        (int)(cfg_autoDisarmEn ? 1 : 0));
-  db.set(DBK_AUTO_SMART_EN,         (int)(cfg_autoSmart ? 1 : 0));
-  db.set(DBK_AUTO_DISARM_UP_DEG,    cfg_autoDisarmUpDeg);
-  db.set(DBK_AUTO_DISARM_TILT_DEG,  cfg_autoDisarmTiltDeg);
+  cfg_autoUpDeg   = clampf(cfg_autoUpDeg,   0.0f, 90.0f);
+  cfg_autoTiltDeg = clampf(cfg_autoTiltDeg, 0.0f, 90.0f);
+  cfg_autoHoldMs  = clamp16(cfg_autoHoldMs, 50, 2000);
 
-  if (!cfg_autoDisarmEn) {
-    oriBaseValid = false;
-    moveOverSince = 0;
-    g_learnState = LEARN_NONE;
-  }
+  db.set(DBK_AUTO_UP_DEG,   cfg_autoUpDeg);
+  db.set(DBK_AUTO_TILT_DEG, cfg_autoTiltDeg);
+  db.set(DBK_AUTO_HOLD_MS,  (int)cfg_autoHoldMs);
+
+  if (!cfg_autoDisarmEn) resetAutoDisarm();
 
   // ESP-NOW settings
   if (auto e = db.get(kk::espNowEn))   cfg_espNowEn = e.toBool();
@@ -1143,12 +1101,11 @@ void setup(){
   db.init(kk::testAlarm,   0);
 
   // Defaults (string keys for auto-disarm)
-  db.init(DBK_AUTO_DISARM_EN,        1);
-  db.init(DBK_AUTO_SMART_EN,         1);
-  db.init(DBK_AUTO_DISARM_UP_DEG,    cfg_autoDisarmUpDeg);
-  db.init(DBK_AUTO_DISARM_TILT_DEG,  cfg_autoDisarmTiltDeg);
-  db.init(DBK_LEARN_UP_DEG,          SMART_UP_DEFAULT_DEG);
-  db.init(DBK_LEARN_TILT_DEG,        SMART_TILT_DEFAULT_DEG);
+  db.init(DBK_AUTO_DISARM_EN, 1);
+  db.init(DBK_AUTO_DETECT,    1);
+  db.init(DBK_AUTO_UP_DEG,    cfg_autoUpDeg);
+  db.init(DBK_AUTO_TILT_DEG,  cfg_autoTiltDeg);
+  db.init(DBK_AUTO_HOLD_MS,   (int)cfg_autoHoldMs);
 
   // Load persisted (DB_KEYS)
   cfg_name         = db.get(kk::name).toString();
@@ -1167,13 +1124,11 @@ void setup(){
   cfg_hubMacStr    = db.get(kk::hubMac).toString();
 
   // Load persisted (auto-disarm)
-  cfg_autoDisarmEn     = (db.get(DBK_AUTO_DISARM_EN).toInt() != 0);
-  cfg_autoSmart        = (db.get(DBK_AUTO_SMART_EN).toInt() != 0);
-  cfg_autoDisarmUpDeg  = clampf(db.get(DBK_AUTO_DISARM_UP_DEG).toFloat(),   0.0f, 90.0f);
-  cfg_autoDisarmTiltDeg= clampf(db.get(DBK_AUTO_DISARM_TILT_DEG).toFloat(), 0.0f, 90.0f);
-
-  cfg_learnUpDeg       = clampf(db.get(DBK_LEARN_UP_DEG).toFloat(),   0.0f, 90.0f);
-  cfg_learnTiltDeg     = clampf(db.get(DBK_LEARN_TILT_DEG).toFloat(), 0.0f, 90.0f);
+  cfg_autoDisarmEn = (db.get(DBK_AUTO_DISARM_EN).toInt() != 0);
+  cfg_autoDetect   = (db.get(DBK_AUTO_DETECT).toInt() != 0);
+  cfg_autoUpDeg    = clampf(db.get(DBK_AUTO_UP_DEG).toFloat(),   0.0f, 90.0f);
+  cfg_autoTiltDeg  = clampf(db.get(DBK_AUTO_TILT_DEG).toFloat(), 0.0f, 90.0f);
+  cfg_autoHoldMs   = clamp16((uint16_t)db.get(DBK_AUTO_HOLD_MS).toInt(), 50, 2000);
 
   espNowEnabled = cfg_espNowEn;
   hubMacValid = false;
@@ -1201,6 +1156,7 @@ void setup(){
   }
 
   recalibrateBaseline();
+  resetAutoDisarm();
 
   setArmed(cfg_armedSw,false);
   bootMs = millis();
@@ -1228,17 +1184,20 @@ void loop(){
   handleButton(now);
   updateGreenLED();
 
+  // AP window after ARM
   if (armed && wifiApActiveAfterArm && (now - wifiArmStart >= ARMED_AP_WINDOW_MS)) {
     wifiAfterArmWindow();
     wifiApActiveAfterArm = false;
   }
 
+  // DISARMED: sleep after grace if no clients
   if (!armed){
     bool clientConnected = (WiFi.softAPgetStationNum()>0);
     bool inGrace = (now - bootMs) < DISARMED_AP_GRACE_MS;
     if (!clientConnected && !inGrace) suspendUntilLongPressToArm();
   }
 
+  // Battery periodic update
   if (now - lastVbatMs >= VBAT_PERIOD_MS) {
     lastVbatMs = now;
     g_vbat_V   = readVbat();
@@ -1256,64 +1215,82 @@ void loop(){
 
   if (!armed) return;
 
-  if (now - lastSample >= SAMPLE_INTERVAL_MS){
-    lastSample = now;
+  // IMU sample timing
+  if (now - lastSample < SAMPLE_INTERVAL_MS) return;
+  lastSample = now;
 
-    if (imuOK){
-      sensors_event_t accel, gyro, temp;
-      if (lsm6.getEvent(&accel, &gyro, &temp)) {
+  if (!imuOK) return;
 
-        float gx = accel.acceleration.x / MS2_PER_G;
-        float gy = accel.acceleration.y / MS2_PER_G;
-        float gz = accel.acceleration.z / MS2_PER_G;
+  sensors_event_t accel, gyro, temp;
+  if (!lsm6.getEvent(&accel, &gyro, &temp)) return;
 
-        gravF.x = MOVE_GRAV_ALPHA*gravF.x + (1.0f - MOVE_GRAV_ALPHA)*gx;
-        gravF.y = MOVE_GRAV_ALPHA*gravF.y + (1.0f - MOVE_GRAV_ALPHA)*gy;
-        gravF.z = MOVE_GRAV_ALPHA*gravF.z + (1.0f - MOVE_GRAV_ALPHA)*gz;
+  float gx = accel.acceleration.x / MS2_PER_G;
+  float gy = accel.acceleration.y / MS2_PER_G;
+  float gz = accel.acceleration.z / MS2_PER_G;
 
-        float mag = mag3(gx,gy,gz);
-        baselineMagG = baselineMagG*0.999f + mag*0.001f;
-        float d = fabsf(mag - baselineMagG);
-        g_lastDelta = d;
-
-        if (cfg_autoDisarmEn && cfg_autoSmart && (g_learnState != LEARN_NONE)) {
-          learnTick(now, gravF, d);
-
-          stopPulse();
-          inMotion = false;
-          consecutiveTriggers = 0;
-          return;
-        }
-
-        if (cfg_autoDisarmEn && !cfg_autoSmart && !oriBaseValid && accelMagOk(gravF) && (d < (cfg_deltaG * 0.60f))) {
-          gravityToPitchRoll(gravF, basePitchDeg, baseRollDeg);
-          oriBaseValid = true;
-          moveOverSince = 0;
-          Serial.printf("AUTO-DISARM: baseline captured (manual) pitch=%.1f roll=%.1f\n", basePitchDeg, baseRollDeg);
-        }
-
-        if (cfg_autoDisarmEn && checkAutoDisarmMove(now, gravF)) {
-          Serial.println("AUTO-DISARM: rod moved -> disarm");
-          setArmed(false, false);
-          return;
-        }
-
-        if (d >= cfg_deltaG){ if (consecutiveTriggers<255) consecutiveTriggers++; }
-        else if (consecutiveTriggers>0) consecutiveTriggers--;
-
-        bool motionNow = (consecutiveTriggers >= TRIGGER_SAMPLES);
-        if (motionNow && !inMotion){
-          inMotion = true; motionStartMs = now;
-          startPulse(now, 1);
-        } else if (!motionNow && inMotion){
-          inMotion = false;
-        }
-      }
-    }
+  // init gravity filter
+  if (!gravInited) {
+    gravF = {gx, gy, gz};
+    gravInited = true;
+  } else {
+    gravF.x = MOVE_GRAV_ALPHA*gravF.x + (1.0f - MOVE_GRAV_ALPHA)*gx;
+    gravF.y = MOVE_GRAV_ALPHA*gravF.y + (1.0f - MOVE_GRAV_ALPHA)*gy;
+    gravF.z = MOVE_GRAV_ALPHA*gravF.z + (1.0f - MOVE_GRAV_ALPHA)*gz;
   }
 
+  float mag = mag3(gx,gy,gz);
+  baselineMagG = baselineMagG*0.999f + mag*0.001f;
+
+  float d = fabsf(mag - baselineMagG);
+  g_lastDelta = d;
+
+  // ARM warmup block
+  if (armWarmup) {
+    warmupCnt++;
+    warmupSumMag += mag;
+
+    if ((now - armAtMs) >= ARM_SETTLE_MS) {
+      if (warmupCnt > 0) baselineMagG = warmupSumMag / (float)warmupCnt;
+
+      consecutiveTriggers = 0;
+      inMotion = false;
+      stopPulse();
+
+      armWarmup = false;
+
+      resetAutoDisarm();
+      Serial.println("ARM warmup finished");
+    }
+    return;
+  }
+
+  // Auto-disarm baseline capture (easy + reliable)
+  autoDisarmCaptureBaseline(now, gravF, d);
+
+  // Auto-disarm trigger
+  if (checkAutoDisarmMove(now, gravF)) {
+    Serial.println("AUTO-DISARM: rod moved -> disarm");
+    setArmed(false, false);
+    return;
+  }
+
+  // Bite detection (Δg)
+  if (d >= cfg_deltaG){ if (consecutiveTriggers<255) consecutiveTriggers++; }
+  else if (consecutiveTriggers>0) consecutiveTriggers--;
+
+  bool motionNow = (consecutiveTriggers >= TRIGGER_SAMPLES);
+  if (motionNow && !inMotion){
+    inMotion = true;
+    motionStartMs = now;
+    startPulse(now, 1);
+  } else if (!motionNow && inMotion){
+    inMotion = false;
+  }
+
+  // End short pulse
   if (pulseOn && (int32_t)(now - pulseOffAt) >= 0) stopPulse();
 
+  // Continuous vibration -> repeated pulses
   if (inMotion){
     uint32_t motionDur = now - motionStartMs;
     if (motionDur >= cfg_contThresh){
@@ -1323,4 +1300,3 @@ void loop(){
     }
   }
 }
-// ==============================
