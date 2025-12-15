@@ -21,19 +21,30 @@
       * Low-battery alarm over ESP-NOW (eventType = 3)
       * Web "Calibrate baseline & test alarm" button
       * Automatic baseline recalibration on disarm
+
+  - NEW: Auto-disarm (anti-noise) + Smart learning
+      * Auto-disarm (master) default ON
+      * Smart-detection default ON:
+          - Every time you ARM, it runs an automatic learn:
+              10s learn NORMAL + 10s learn MOVED
+          - During learn (first 20s) bite alarms are suppressed
+          - After learn it auto-derives thresholds:
+              UP  = clamp(0.6 * maxPitchDev, 15..60) deg
+              TILT= clamp(0.6 * maxRollDev , 15..70) deg
+            If no meaningful move detected -> fallback defaults 25/35 deg
+      * If Smart-detection OFF -> manual thresholds shown in UI
 ********************************************************/
 
 #include <Arduino.h>
 #include <Wire.h>
 #include <WiFi.h>
-#include <esp_now.h>               // --- ESP-NOW ---
+#include <esp_now.h>
 #include <esp_idf_version.h>
 #include <esp_sleep.h>
 #if ESP_IDF_VERSION_MAJOR >= 5
   #include <esp_wifi_types.h>
 #endif
 
-// ---- LSM6DS3 (Adafruit LSM6DS) ----
 #include <Adafruit_Sensor.h>
 #include <Adafruit_LSM6DS3.h>
 
@@ -41,64 +52,56 @@
 #include <GyverDBFile.h>
 #include <SettingsGyver.h>
 
-// Optional: gentle reminder about board
 #if !defined(ARDUINO_XIAO_ESP32S3) && !defined(ARDUINO_XIAO_ESP32C6) && !defined(ARDUINO_XIAO_ESP32C3)
 #warning "This sketch is tuned for Seeed XIAO ESP32-S3 / ESP32-C6 / ESP32-C3. Check pin mappings if using another board."
 #endif
 
 // ==============================
-//            PINS (Seeed XIAO ESP32-C3)
+//            PINS (Example: XIAO ESP32-C3 style)
 // ==============================
+#define LED_GREEN   D7
+#define LED_RED     D8
+#define BUZZER      D9
+#define BUTTON      D6
 
-// Outputs (MOSFETs)
-#define LED_GREEN   D7          // LED_G net, GPIO17/RX
-#define LED_RED     D8          // LED_R net, GPIO19/MISO
-#define BUZZER      D9         // BUZZZ net, GPIO20/MOSI
+#define PIN_PWR_CTRL D0
+#define PIN_BTN_IN   D1
 
-// User button (SW1 – the existing ARM/DISARM button)
-#define BUTTON      D6          // if SW1 is on D6; change if needed
+#define VBAT_PIN    D2
 
-// Soft-latch power circuit (bottom-left block)
-#define PIN_PWR_CTRL D0         // PWR_CTRL net -> Q5 gate (AO3400A)
-#define PIN_BTN_IN   D1         // BTN_IN / PWR_KEY node from latch
-
-// Battery monitor divider
-#define VBAT_PIN    D2          // Divider R9/R10 -> D2/A2/ADC
-
-// I2C for LSM6DS3
-#define I2C_SDA_PIN D4          // SDA
-#define I2C_SCL_PIN D5          // SCL
+#define I2C_SDA_PIN D4
+#define I2C_SCL_PIN D5
 
 // ==============================
 // LSM6DS3 CONFIG
 // ==============================
-const uint8_t LSM6_ADDR         = 0x6B;      // change to 0x6B if needed
-const float   MS2_PER_G         = 9.80665f;  // m/s^2 per g
+const uint8_t LSM6_ADDR         = 0x6B;
+const float   MS2_PER_G         = 9.80665f;
 
 const uint8_t  TRIGGER_SAMPLES    = 3;
-const uint16_t LONG_PRESS_MS      = 1000;    // BUTTON (SW1) long press for ARM/DISARM
+const uint16_t LONG_PRESS_MS      = 1000;
 const uint16_t DEBOUNCE_MS        = 30;
 const uint16_t SAMPLE_INTERVAL_MS = 10;
 
 // --- Power button (BTN_IN) timings ---
 const uint32_t PWR_DEBOUNCE_MS    = 50;
-const uint32_t PWR_LONG_PRESS_MS  = 3000;    // ~3s for power OFF
+const uint32_t PWR_LONG_PRESS_MS  = 3000;
 
 // Time windows
-const uint32_t DISARMED_AP_GRACE_MS = 3UL * 60UL * 1000UL;   // DISARMED → AP grace
-const uint32_t ARMED_AP_WINDOW_MS   = 2UL * 60UL * 1000UL;   // ARMED   → AP window
+const uint32_t DISARMED_AP_GRACE_MS = 3UL * 60UL * 1000UL;
+const uint32_t ARMED_AP_WINDOW_MS   = 2UL * 60UL * 1000UL;
 
 // Battery read config
-const float    VBAT_VREF          = 3.30f;   // ADC reference (3.3V)
-const float    VBAT_DIV           = 2.00f;   // 100k / 100k divider
-const float    VBAT_CAL           = 1.00f;   // calibration factor
+const float    VBAT_VREF          = 3.30f;
+const float    VBAT_DIV           = 2.00f;
+const float    VBAT_CAL           = 1.00f;
 const uint16_t VBAT_SAMPLES       = 16;
 const uint16_t VBAT_ADC_MAX       = 4095;
-const uint32_t VBAT_PERIOD_MS     = 5000;    // 5s
+const uint32_t VBAT_PERIOD_MS     = 5000;
 
 // Low-battery ESP-NOW alert
-const int      LOW_BATT_THRESHOLD_PCT = 20;  // send alarm at/below this
-const int      LOW_BATT_HYSTERESIS    = 5;   // reset flag when goes above threshold+hyst
+const int      LOW_BATT_THRESHOLD_PCT = 20;
+const int      LOW_BATT_HYSTERESIS    = 5;
 
 // ==============================
 // STATE
@@ -116,12 +119,12 @@ bool btnPrev = HIGH, btnIsDown = false, longFired = false;
 uint32_t btnLastChange = 0, btnDownAt = 0;
 
 // POWER BUTTON (SW2 / BTN_IN) FSM – POWER OFF
-const bool PWRBTN_ACTIVE_LEVEL = LOW; // BTN_IN is active-LOW
+const bool PWRBTN_ACTIVE_LEVEL = LOW;
 bool     pwrBtnStableState   = !PWRBTN_ACTIVE_LEVEL;
 bool     pwrBtnPrevStable    = !PWRBTN_ACTIVE_LEVEL;
 uint32_t pwrBtnLastChangeMs  = 0;
 uint32_t pwrBtnPressStartMs  = 0;
-bool     pwrIgnoreFirstPress = true;  // ignore the press used to power-on
+bool     pwrIgnoreFirstPress = true;
 
 // telemetry
 volatile float    g_lastDelta = 0.0f;
@@ -140,12 +143,11 @@ bool     lowBattReported = false;
 // ==============================
 // ESP-NOW STATE
 // ==============================
-
 struct __attribute__((packed)) BitePacket {
-  char    rodName[16];   // sensor name / rod ID
-  uint8_t eventType;     // 1 = short/first, 2 = continuous, 3 = low battery
+  char    rodName[16];
+  uint8_t eventType;     // 1 short/first, 2 continuous, 3 low battery
   uint8_t batteryPct;    // 0..100
-  float   deltaG;        // last Δg
+  float   deltaG;
 };
 
 bool     cfg_espNowEn   = false;
@@ -153,7 +155,6 @@ String   cfg_hubMacStr  = "";
 bool     espNowEnabled  = false;
 bool     espNowInited   = false;
 bool     hubMacValid    = false;
-// MAC of the HUB (ESP-NOW peer)
 uint8_t  hubMacAddr[6]  = {0};
 
 // ==============================
@@ -273,11 +274,67 @@ bool     cfg_langRu=false;
 int      g_prevLangIdx=-1;
 
 // Output settings
-uint16_t cfg_buzVolPct   = 100;   // buzzer volume %
-uint16_t cfg_ledRedPct   = 100;   // red LED brightness %
-uint16_t cfg_ledGreenPct = 100;   // green LED brightness %
+uint16_t cfg_buzVolPct   = 100;
+uint16_t cfg_ledRedPct   = 100;
+uint16_t cfg_ledGreenPct = 100;
 
 inline const LangPack& L(){ return cfg_langRu?LANG_RU:LANG_EN; }
+
+// ==============================
+// AUTO-DISARM CONFIG + LEARNING (stored with string keys)
+// ==============================
+// Master enable
+const char* DBK_AUTO_DISARM_EN       = "autoDisarmEn";
+
+// Smart/manual
+const char* DBK_AUTO_SMART_EN        = "autoDisarmSmart";
+const char* DBK_AUTO_DISARM_UP_DEG   = "autoDisarmUpDeg";
+const char* DBK_AUTO_DISARM_TILT_DEG = "autoDisarmTiltDeg";
+
+// Learned results (used only in Smart mode)
+const char* DBK_LEARN_UP_DEG         = "autoLearnUpDeg";
+const char* DBK_LEARN_TILT_DEG       = "autoLearnTiltDeg";
+
+// Defaults for Smart fallback
+const float SMART_UP_DEFAULT_DEG     = 25.0f;
+const float SMART_TILT_DEFAULT_DEG   = 35.0f;
+
+// UI/config variables
+bool  cfg_autoDisarmEn     = true;   // default ON
+bool  cfg_autoSmart        = true;   // default ON
+float cfg_autoDisarmUpDeg  = 25.0f;  // manual if Smart OFF
+float cfg_autoDisarmTiltDeg= 35.0f;  // manual if Smart OFF
+
+// learned thresholds for Smart ON (derived each arm)
+float cfg_learnUpDeg       = SMART_UP_DEFAULT_DEG;
+float cfg_learnTiltDeg     = SMART_TILT_DEFAULT_DEG;
+
+// Orientation math
+struct Vec3 { float x,y,z; };
+static Vec3 gravF = {0,0,1};
+
+static bool  oriBaseValid = false;
+static float basePitchDeg = 0.0f;
+static float baseRollDeg  = 0.0f;
+static uint32_t moveOverSince = 0;
+
+// gravity filter + gate
+const float    MOVE_GRAV_ALPHA = 0.94f;
+const uint32_t MOVE_HOLD_MS    = 120;
+const float    MOVE_MAG_MIN_G  = 0.75f;
+const float    MOVE_MAG_MAX_G  = 1.25f;
+
+// Learn timing (10s + 10s)
+enum LearnState : uint8_t { LEARN_NONE=0, LEARN_NORMAL=1, LEARN_MOVED=2 };
+static LearnState g_learnState = LEARN_NONE;
+static uint32_t   g_learnStartMs = 0;
+static uint32_t   g_phaseStartMs = 0;
+
+static Vec3  g_sumN = {0,0,0};
+static uint32_t g_cntN = 0;
+
+static float g_maxPitchDev = 0.0f;
+static float g_maxRollDev  = 0.0f;
 
 // ==============================
 // BUZZER + LED PWM HELPERS (ESP32 family)
@@ -292,20 +349,24 @@ inline const LangPack& L(){ return cfg_langRu?LANG_RU:LANG_EN; }
 
   static bool pwmReady = false;
 
+  inline void pwmWriteCh(uint8_t ch, uint32_t duty){
+#if ESP_IDF_VERSION_MAJOR >= 5
+    ledcWriteChannel(ch, duty);
+#else
+    ledcWrite(ch, duty);
+#endif
+  }
+
   void pwmInit() {
 #if ESP_IDF_VERSION_MAJOR >= 5
-    // Arduino-ESP32 v3.x (IDF5): new LEDC API
-    // Buzzer: 3 kHz, BUZZER_BITS
     ledcAttachChannel(BUZZER, 3000, BUZZER_BITS, BUZZER_LEDC_CH);
     ledcWriteChannel(BUZZER_LEDC_CH, 0);
 
-    // LEDs: 1 kHz, LED_BITS
     ledcAttachChannel(LED_GREEN, 1000, LED_BITS, LED_GREEN_CH);
     ledcAttachChannel(LED_RED,   1000, LED_BITS, LED_RED_CH);
     ledcWriteChannel(LED_GREEN_CH, 0);
     ledcWriteChannel(LED_RED_CH,   0);
 #else
-    // Arduino-ESP32 v2.x: classic LEDC API
     ledcSetup(BUZZER_LEDC_CH, 3000, BUZZER_BITS);
     ledcAttachPin(BUZZER, BUZZER_LEDC_CH);
     pwmWriteCh(BUZZER_LEDC_CH, 0);
@@ -317,9 +378,8 @@ inline const LangPack& L(){ return cfg_langRu?LANG_RU:LANG_EN; }
     ledcWrite(LED_GREEN_CH, 0);
     ledcWrite(LED_RED_CH,   0);
 #endif
-
     pwmReady = true;
-}
+  }
 
   inline uint16_t buzzerDuty(){
     if (cfg_buzVolPct > 100) cfg_buzVolPct = 100;
@@ -331,18 +391,9 @@ inline const LangPack& L(){ return cfg_langRu?LANG_RU:LANG_EN; }
     return (uint8_t)((pct * ((1 << LED_BITS) - 1)) / 100);
   }
 
-  inline void pwmWriteCh(uint8_t ch, uint32_t duty){
-#if ESP_IDF_VERSION_MAJOR >= 5
-    ledcWriteChannel(ch, duty);
-#else
-    ledcWrite(ch, duty);
-#endif
-  }
-
   inline void buzzStart(){
     if (!pwmReady) return;
-    uint16_t d = buzzerDuty();
-    pwmWriteCh(BUZZER_LEDC_CH, d);
+    pwmWriteCh(BUZZER_LEDC_CH, buzzerDuty());
   }
 
   inline void buzzStop(){
@@ -376,6 +427,14 @@ inline void shortBeep(){ buzzStart(); delay(150); buzzStop(); }
 inline float mag3(float x,float y,float z){return sqrtf(x*x+y*y+z*z);}
 static inline uint16_t clamp16(uint16_t v,uint16_t lo,uint16_t hi){return v<lo?lo:(v>hi?hi:v);}
 static inline float clampf(float v,float lo,float hi){return v<lo?lo:(v>hi?hi:v);}
+
+static inline float vMag(const Vec3& v){ return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z); }
+static inline float rad2deg(float r){ return r * 57.2957795f; }
+
+static void gravityToPitchRoll(const Vec3& g, float& pitchDeg, float& rollDeg) {
+  pitchDeg = rad2deg(atan2f(-g.x, sqrtf(g.y*g.y + g.z*g.z)));
+  rollDeg  = rad2deg(atan2f(g.y, g.z));
+}
 
 // ==============================
 // Battery read + mapping
@@ -423,13 +482,10 @@ void wifiEnterConfigMode() {
   WiFi.setSleep(true);
 }
 
-// Called after ARMED AP window expires
 void wifiAfterArmWindow() {
-  // Turn AP off, keep STA (for ESP-NOW)
   WiFi.softAPdisconnect(true);
   Serial.println("AP disabled after ARM window");
 
-  // If ESP-NOW disabled or hub MAC invalid – we can save power more aggressively
   if (!espNowEnabled || !hubMacValid) {
     WiFi.disconnect(true, true);
     delay(50);
@@ -444,8 +500,7 @@ void wifiAfterArmWindow() {
 bool parseMac(const String& mac, uint8_t out[6]) {
   if (mac.length() != 17) return false;
   int vals[6];
-  if (sscanf(mac.c_str(),
-             "%x:%x:%x:%x:%x:%x",
+  if (sscanf(mac.c_str(), "%x:%x:%x:%x:%x:%x",
              &vals[0], &vals[1], &vals[2],
              &vals[3], &vals[4], &vals[5]) != 6) return false;
   for (int i=0;i<6;i++) out[i] = (uint8_t)vals[i];
@@ -453,23 +508,15 @@ bool parseMac(const String& mac, uint8_t out[6]) {
 }
 
 #if ESP_IDF_VERSION_MAJOR >= 5
-void onEspNowSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
-  (void)info;
-  (void)status;
-}
+void onEspNowSent(const wifi_tx_info_t *info, esp_now_send_status_t status) { (void)info; (void)status; }
 #else
-void onEspNowSent(const uint8_t *mac, esp_now_send_status_t status) {
-  (void)mac;
-  (void)status;
-}
+void onEspNowSent(const uint8_t *mac, esp_now_send_status_t status) { (void)mac; (void)status; }
 #endif
 
 void espNowBegin() {
   if (!espNowEnabled || espNowInited || !hubMacValid) return;
 
-  if (WiFi.getMode() == WIFI_OFF) {
-    WiFi.mode(WIFI_STA);
-  }
+  if (WiFi.getMode() == WIFI_OFF) WiFi.mode(WIFI_STA);
 
   if (esp_now_init() != ESP_OK) {
     Serial.println("ESP-NOW init failed");
@@ -480,14 +527,11 @@ void espNowBegin() {
 
   esp_now_peer_info_t peer{};
   memcpy(peer.peer_addr, hubMacAddr, 6);
-  peer.channel = 0;     // current Wi-Fi channel
+  peer.channel = 0;
   peer.encrypt = false;
 
-  if (esp_now_add_peer(&peer) != ESP_OK) {
-    Serial.println("ESP-NOW add peer failed");
-  } else {
-    Serial.println("ESP-NOW peer added");
-  }
+  if (esp_now_add_peer(&peer) != ESP_OK) Serial.println("ESP-NOW add peer failed");
+  else                                   Serial.println("ESP-NOW peer added");
 }
 
 void espNowEnd() {
@@ -501,7 +545,6 @@ void sendBitePacket(uint8_t eventType) {
   if (!espNowEnabled || !espNowInited || !hubMacValid) return;
 
   BitePacket pkt{};
-  // rod ID = sensor name (AP SSID)
   strlcpy(pkt.rodName, cfg_name.c_str(), sizeof(pkt.rodName));
   pkt.eventType  = eventType;
   pkt.batteryPct = (uint8_t) constrain(g_batt_pct, 0, 100);
@@ -514,13 +557,12 @@ void sendBitePacket(uint8_t eventType) {
 // ALERT PULSES / LEDS
 // ==============================
 inline void startPulse(uint32_t now, uint8_t eventType){
-  (void)now;
   pulseOn        = true;
   lastPulseStart = now;
   pulseOffAt     = now + cfg_shortPulseMs;
   setRedLED(true);
   buzzStart();
-  g_alerts++;
+  g_alerts = g_alerts + 1;
   sendBitePacket(eventType);
 }
 
@@ -569,35 +611,17 @@ void recalibrateBaseline() {
 // ==============================
 // SOFT-LATCH POWER CONTROL HELPERS
 // ==============================
-inline void holdPower() {
-  digitalWrite(PIN_PWR_CTRL, HIGH);  // keep Q5 ON
-}
+inline void holdPower()    { digitalWrite(PIN_PWR_CTRL, HIGH); }
+inline void releasePower() { digitalWrite(PIN_PWR_CTRL, LOW);  }
 
-inline void releasePower() {
-  digitalWrite(PIN_PWR_CTRL, LOW);   // release latch -> power OFF
-}
-
-// Called when a valid long-press on PWR_KEY is detected
 void requestPowerOff() {
   Serial.println("Power off requested, shutting down...");
-
-  // Flush DB / filesystem, send any final packets if needed
   db.update();
   delay(100);
-
-  // Optionally notify hub (low priority, can be omitted)
-  // sendBitePacket(3);
-
-  // Release latch
   releasePower();
-
-  // Wait until power actually cuts
-  while (true) {
-    delay(100);
-  }
+  while (true) delay(100);
 }
 
-// Debounced read of BTN_IN (PWR_KEY)
 bool readPwrButtonDebounced() {
   uint32_t now = millis();
   bool raw = digitalRead(PIN_BTN_IN);
@@ -614,13 +638,11 @@ bool readPwrButtonDebounced() {
   return pwrBtnStableState;
 }
 
-// Handles power button long-press for power OFF
 void handlePowerButton() {
   uint32_t now = millis();
   bool level  = readPwrButtonDebounced();
   bool pressed = (level == PWRBTN_ACTIVE_LEVEL);
 
-  // 1) Ignore the very first press that was used to power-on
   if (pwrIgnoreFirstPress) {
     if (!pressed) {
       pwrIgnoreFirstPress = false;
@@ -629,21 +651,154 @@ void handlePowerButton() {
     return;
   }
 
-  // 2) Normal operation: detect long press
   if (pressed) {
     if (pwrBtnPrevStable != PWRBTN_ACTIVE_LEVEL) {
-      // just pressed
       pwrBtnPressStartMs = now;
-    } else {
-      // still pressed, check duration
-      if (now - pwrBtnPressStartMs >= PWR_LONG_PRESS_MS) {
-        Serial.println("Power button long press -> power off");
-        requestPowerOff();
-      }
+    } else if (now - pwrBtnPressStartMs >= PWR_LONG_PRESS_MS) {
+      Serial.println("Power button long press -> power off");
+      requestPowerOff();
     }
   }
 
   pwrBtnPrevStable = level;
+}
+
+// ==============================
+// AUTO-DISARM: learning + trigger
+// ==============================
+static inline bool accelMagOk(const Vec3& gNow) {
+  float m = vMag(gNow);
+  return (m >= MOVE_MAG_MIN_G && m <= MOVE_MAG_MAX_G);
+}
+
+static void learnStart(uint32_t now) {
+  g_learnState   = LEARN_NORMAL;
+  g_learnStartMs = now;
+  g_phaseStartMs = now;
+
+  g_sumN = {0,0,0};
+  g_cntN = 0;
+
+  g_maxPitchDev = 0.0f;
+  g_maxRollDev  = 0.0f;
+
+  oriBaseValid = false;
+  moveOverSince = 0;
+
+  shortBeep();
+  Serial.println("AUTO-LEARN: started (10s NORMAL + 10s MOVED)");
+}
+
+static void learnFinish(bool movedMeaningful) {
+  if (movedMeaningful) {
+    cfg_learnUpDeg   = clampf(0.60f * g_maxPitchDev, 15.0f, 60.0f);
+    cfg_learnTiltDeg = clampf(0.60f * g_maxRollDev,  15.0f, 70.0f);
+    Serial.printf("AUTO-LEARN: derived UP=%.1f TILT=%.1f (maxP=%.1f maxR=%.1f)\n",
+                  cfg_learnUpDeg, cfg_learnTiltDeg, g_maxPitchDev, g_maxRollDev);
+  } else {
+    cfg_learnUpDeg   = SMART_UP_DEFAULT_DEG;
+    cfg_learnTiltDeg = SMART_TILT_DEFAULT_DEG;
+    Serial.println("AUTO-LEARN: no meaningful moved detected -> fallback UP=25 TILT=35");
+  }
+
+  db.set(DBK_LEARN_UP_DEG,   cfg_learnUpDeg);
+  db.set(DBK_LEARN_TILT_DEG, cfg_learnTiltDeg);
+
+  shortBeep(); delay(80); shortBeep();
+  g_learnState = LEARN_NONE;
+}
+
+static void learnTick(uint32_t now, const Vec3& gNow, float dDelta) {
+  bool stable = accelMagOk(gNow) && (dDelta < (cfg_deltaG * 0.60f));
+
+  if (g_learnState == LEARN_NORMAL) {
+    if (stable) {
+      g_sumN.x += gNow.x;
+      g_sumN.y += gNow.y;
+      g_sumN.z += gNow.z;
+      g_cntN++;
+    }
+
+    if (now - g_phaseStartMs >= 10000UL) {
+      Vec3 avg = gNow;
+      if (g_cntN >= 30) {
+        avg.x = g_sumN.x / (float)g_cntN;
+        avg.y = g_sumN.y / (float)g_cntN;
+        avg.z = g_sumN.z / (float)g_cntN;
+      }
+
+      gravityToPitchRoll(avg, basePitchDeg, baseRollDeg);
+      oriBaseValid = true;
+      moveOverSince = 0;
+
+      g_learnState = LEARN_MOVED;
+      g_phaseStartMs = now;
+
+      Serial.printf("AUTO-LEARN: NORMAL done (cnt=%lu) basePitch=%.1f baseRoll=%.1f\n",
+                    (unsigned long)g_cntN, basePitchDeg, baseRollDeg);
+      shortBeep();
+    }
+    return;
+  }
+
+  if (g_learnState == LEARN_MOVED) {
+    if (oriBaseValid && accelMagOk(gNow)) {
+      float pitchDeg, rollDeg;
+      gravityToPitchRoll(gNow, pitchDeg, rollDeg);
+
+      float dP = fabsf(pitchDeg - basePitchDeg);
+      float dR = fabsf(rollDeg  - baseRollDeg);
+
+      if (dP > g_maxPitchDev) g_maxPitchDev = dP;
+      if (dR > g_maxRollDev)  g_maxRollDev  = dR;
+    }
+
+    if (now - g_phaseStartMs >= 10000UL) {
+      bool meaningful = (g_maxPitchDev >= 12.0f) || (g_maxRollDev >= 12.0f);
+      learnFinish(meaningful);
+    }
+    return;
+  }
+}
+
+static bool checkAutoDisarmMove(uint32_t now, const Vec3& gNow) {
+  if (!cfg_autoDisarmEn) return false;
+  if (!armed) return false;
+
+  if (g_learnState != LEARN_NONE) return false;
+  if (!oriBaseValid) return false;
+
+  if (!accelMagOk(gNow)) {
+    moveOverSince = 0;
+    return false;
+  }
+
+  float upTh, tiltTh;
+  if (cfg_autoSmart) {
+    upTh   = cfg_learnUpDeg;
+    tiltTh = cfg_learnTiltDeg;
+  } else {
+    upTh   = cfg_autoDisarmUpDeg;
+    tiltTh = cfg_autoDisarmTiltDeg;
+    if (upTh <= 0.0f && tiltTh <= 0.0f) return false;
+  }
+
+  float pitchDeg, rollDeg;
+  gravityToPitchRoll(gNow, pitchDeg, rollDeg);
+
+  float dPitch = fabsf(pitchDeg - basePitchDeg);
+  float dRoll  = fabsf(rollDeg  - baseRollDeg);
+
+  bool overUp   = (upTh   > 0.0f) && (dPitch >= upTh);
+  bool overTilt = (tiltTh > 0.0f) && (dRoll  >= tiltTh);
+
+  if (overUp || overTilt) {
+    if (moveOverSince == 0) moveOverSince = now;
+    if (now - moveOverSince >= MOVE_HOLD_MS) return true;
+  } else {
+    moveOverSince = 0;
+  }
+  return false;
 }
 
 // ==============================
@@ -657,15 +812,12 @@ void suspendUntilLongPressToArm(){
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
 
 #if CONFIG_IDF_TARGET_ESP32C3
-  // ESP32-C3: use GPIO wake (EXT0/EXT1 are not supported the same way)
   uint64_t mask = 1ULL << (uint8_t)BUTTON;
   esp_deep_sleep_enable_gpio_wakeup(mask, ESP_GPIO_WAKEUP_GPIO_LOW);
 #elif CONFIG_IDF_TARGET_ESP32C6
-  // ESP32-C6: EXT1 works
   uint64_t mask = 1ULL << (uint8_t)BUTTON;
   esp_sleep_enable_ext1_wakeup(mask, ESP_EXT1_WAKEUP_ANY_LOW);
 #else
-  // Classic ESP32: EXT0 is fine
   esp_sleep_enable_ext0_wakeup((gpio_num_t)BUTTON, 0);
 #endif
 
@@ -676,27 +828,39 @@ void setArmed(bool v,bool deepSleep){
   armed=v; cfg_armedSw=v; db.set(kk::armedSw,v); updateGreenLED();
 
   if(v){
-    // Enter ARMED
     longBeep();
+
+    stopPulse();
+    inMotion = false;
+    consecutiveTriggers = 0;
+
     wifiArmStart = millis();
     wifiApActiveAfterArm = true;
 
-    // Prepare ESP-NOW if enabled
     if (espNowEnabled && hubMacValid) espNowBegin();
+
+    oriBaseValid = false;
+    moveOverSince = 0;
+
+    if (cfg_autoDisarmEn && cfg_autoSmart) {
+      learnStart(millis());
+    }
+
   } else {
-    // Recalibrate baseline when disarmed
     recalibrateBaseline();
 
-    // Leaving ARMED: stop ESP-NOW to save power
     espNowEnd();
 
-    // DISARMED: AP ON, then deep sleep handled in loop
+    stopPulse();
+    inMotion = false;
+    consecutiveTriggers = 0;
+
+    g_learnState = LEARN_NONE;
+
     shortBeep(); delay(80); shortBeep();
     wifiEnterConfigMode();
 
-    if (deepSleep) {
-      suspendUntilLongPressToArm();
-    }
+    if (deepSleep) suspendUntilLongPressToArm();
   }
 }
 
@@ -705,6 +869,13 @@ void setArmed(bool v,bool deepSleep){
 // ==============================
 bool saveReboot_f = false;
 bool testAlarm_f  = false;
+
+// UI-only IDs (must be size_t)
+static const size_t UI_AUTO_DISARM_EN   = 1300;
+static const size_t UI_AUTO_SMART       = 1301;
+static const size_t UI_AUTO_UP          = 1302;
+static const size_t UI_AUTO_TILT        = 1303;
+static const size_t UI_AUTO_INFO        = 1304;
 
 void build(sets::Builder& b){
   using namespace sets;
@@ -719,22 +890,42 @@ void build(sets::Builder& b){
     const char* lblLR  = cfg_langRu ? "Яркость красного светодиода" : "Red LED brightness";
     const char* lblLG  = cfg_langRu ? "Яркость зелёного светодиода" : "Green LED brightness";
 
-    b.Slider(kk::buzVol,    lblBuz, 0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_buzVolPct));
-    b.Slider(kk::ledRedLvl, lblLR,  0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_ledRedPct));
-    b.Slider(kk::ledGreenLvl,lblLG, 0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_ledGreenPct));
+    b.Slider(kk::buzVol,     lblBuz, 0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_buzVolPct));
+    b.Slider(kk::ledRedLvl,  lblLR,  0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_ledRedPct));
+    b.Slider(kk::ledGreenLvl,lblLG,  0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_ledGreenPct));
 
-    // Calibrate + test button
     if (b.Button(kk::testAlarm, L().lblTestAlarm)) testAlarm_f = true;
   }
 
   // --- Sensor group ---
   {
     Group g(b,L().grpSensor);
+
     b.Slider(kk::deltaG,      L().lblSensitivity, 0.02f, 1.0f, 0.01f, "",     AnyPtr(&cfg_deltaG));
     b.Slider(kk::shortPulse,  L().lblShortPulse,  40.0f, 1000.0f, 10.0f, "ms", AnyPtr(&cfg_shortPulseMs));
     b.Slider(kk::pulsePeriod, L().lblPulsePeriod, 100.0f, 2000.0f, 10.0f, "ms", AnyPtr(&cfg_pulsePeriod));
     b.Slider(kk::contThresh,  L().lblContThresh,  50.0f, 2000.0f, 10.0f, "ms", AnyPtr(&cfg_contThresh));
     b.Switch(kk::armedSw, L().lblArmedSwitch);
+
+    const char* lblAuto = cfg_langRu ? "Автоснятие сигнализации" : "Auto-disarm";
+    b.Switch(UI_AUTO_DISARM_EN, lblAuto, &cfg_autoDisarmEn);
+
+    if (cfg_autoDisarmEn) {
+      const char* lblSmart = "Smart-detection";
+      b.Switch(UI_AUTO_SMART, lblSmart, &cfg_autoSmart);
+
+      if (!cfg_autoSmart) {
+        const char* lblUp   = cfg_langRu ? "Auto-disarm UP (градусы, 0=выкл.)"   : "Auto-disarm UP (deg, 0=OFF)";
+        const char* lblTilt = cfg_langRu ? "Auto-disarm TILT (градусы, 0=выкл.)" : "Auto-disarm TILT (deg, 0=OFF)";
+        b.Slider(UI_AUTO_UP,   lblUp,   0.0f, 90.0f, 1.0f, "deg", AnyPtr(&cfg_autoDisarmUpDeg));
+        b.Slider(UI_AUTO_TILT, lblTilt, 0.0f, 90.0f, 1.0f, "deg", AnyPtr(&cfg_autoDisarmTiltDeg));
+      } else {
+        String info = String("Learn each ARM: 10s+10s, using UP=") + String(cfg_learnUpDeg,0) +
+                      "°, TILT=" + String(cfg_learnTiltDeg,0) + "°";
+        // ✅ FIX: Label must use numeric ID, not "smartInfo" string
+        b.Label(UI_AUTO_INFO, info);
+      }
+    }
   }
 
   // --- ESP-NOW group ---
@@ -766,7 +957,7 @@ void build(sets::Builder& b){
 }
 
 void update(sets::Updater& u){
-  // Persist variable-bound sliders manually
+  // Persist core sliders
   db.set(kk::deltaG,      cfg_deltaG);
   db.set(kk::shortPulse,  (int)cfg_shortPulseMs);
   db.set(kk::pulsePeriod, (int)cfg_pulsePeriod);
@@ -774,6 +965,21 @@ void update(sets::Updater& u){
   db.set(kk::buzVol,      (int)cfg_buzVolPct);
   db.set(kk::ledRedLvl,   (int)cfg_ledRedPct);
   db.set(kk::ledGreenLvl, (int)cfg_ledGreenPct);
+
+  // Persist auto-disarm switches + manual thresholds (string keys)
+  cfg_autoDisarmUpDeg   = clampf(cfg_autoDisarmUpDeg,   0.0f, 90.0f);
+  cfg_autoDisarmTiltDeg = clampf(cfg_autoDisarmTiltDeg, 0.0f, 90.0f);
+
+  db.set(DBK_AUTO_DISARM_EN,        (int)(cfg_autoDisarmEn ? 1 : 0));
+  db.set(DBK_AUTO_SMART_EN,         (int)(cfg_autoSmart ? 1 : 0));
+  db.set(DBK_AUTO_DISARM_UP_DEG,    cfg_autoDisarmUpDeg);
+  db.set(DBK_AUTO_DISARM_TILT_DEG,  cfg_autoDisarmTiltDeg);
+
+  if (!cfg_autoDisarmEn) {
+    oriBaseValid = false;
+    moveOverSince = 0;
+    g_learnState = LEARN_NONE;
+  }
 
   // ESP-NOW settings
   if (auto e = db.get(kk::espNowEn))   cfg_espNowEn = e.toBool();
@@ -783,9 +989,7 @@ void update(sets::Updater& u){
   hubMacValid   = false;
   if (cfg_hubMacStr.length() > 0) {
     hubMacValid = parseMac(cfg_hubMacStr, hubMacAddr);
-    if (!hubMacValid) {
-      u.alert(L().msgHubMacBad);
-    }
+    if (!hubMacValid) u.alert(L().msgHubMacBad);
   }
 
   // Armed switch (web toggle)
@@ -834,7 +1038,7 @@ void update(sets::Updater& u){
     }
   }
 
-  // Handle web "Calibrate baseline & test alarm" button
+  // Web "Calibrate baseline & test alarm" button
   if (testAlarm_f) {
     testAlarm_f = false;
     recalibrateBaseline();
@@ -868,7 +1072,6 @@ void update(sets::Updater& u){
   u.update(H_alertsLbl, (int)g_alerts);
   u.update(H_uptimeLbl, (uint32_t)(millis() / 1000));
 
-  // Apply new brightness immediately for green LED
   updateGreenLED();
 }
 
@@ -893,11 +1096,10 @@ static void handleButton(uint32_t now){
 // SETUP
 // ==============================
 void setup(){
-  // --- Power latch pins first ---
   pinMode(PIN_PWR_CTRL, OUTPUT);
-  holdPower();                    // latch power immediately
+  holdPower();
 
-  pinMode(PIN_BTN_IN, INPUT);     // external network already biases levels
+  pinMode(PIN_BTN_IN, INPUT);
 
   pinMode(LED_GREEN,OUTPUT);
   pinMode(LED_RED,OUTPUT);
@@ -911,12 +1113,10 @@ void setup(){
   Serial.println("Fishing Bite Sensor starting...");
 
 #ifdef ESP32
-  // Lower CPU frequency for ESP32-S3 / ESP32-C6 to save power
   setCpuFrequencyMhz(80);
 #endif
 
-  analogReadResolution(12);   // ADC 0..4095
-
+  analogReadResolution(12);
   pwmInit();
 
 #ifdef ESP32
@@ -926,7 +1126,7 @@ void setup(){
 #endif
   db.begin();
 
-  // Defaults
+  // Defaults (DB_KEYS)
   db.init(kk::name,       cfg_name);
   db.init(kk::deltaG,     cfg_deltaG);
   db.init(kk::shortPulse, (int)cfg_shortPulseMs);
@@ -940,9 +1140,17 @@ void setup(){
   db.init(kk::ledGreenLvl, (int)cfg_ledGreenPct);
   db.init(kk::espNowEn,    false);
   db.init(kk::hubMac,      cfg_hubMacStr);
-  db.init(kk::testAlarm,   0);   // just to have key in DB
+  db.init(kk::testAlarm,   0);
 
-  // Load persisted
+  // Defaults (string keys for auto-disarm)
+  db.init(DBK_AUTO_DISARM_EN,        1);
+  db.init(DBK_AUTO_SMART_EN,         1);
+  db.init(DBK_AUTO_DISARM_UP_DEG,    cfg_autoDisarmUpDeg);
+  db.init(DBK_AUTO_DISARM_TILT_DEG,  cfg_autoDisarmTiltDeg);
+  db.init(DBK_LEARN_UP_DEG,          SMART_UP_DEFAULT_DEG);
+  db.init(DBK_LEARN_TILT_DEG,        SMART_TILT_DEFAULT_DEG);
+
+  // Load persisted (DB_KEYS)
   cfg_name         = db.get(kk::name).toString();
   cfg_deltaG       = db.get(kk::deltaG).toFloat();
   cfg_shortPulseMs = db.get(kk::shortPulse).toInt();
@@ -958,26 +1166,29 @@ void setup(){
   cfg_espNowEn     = db.get(kk::espNowEn).toBool();
   cfg_hubMacStr    = db.get(kk::hubMac).toString();
 
+  // Load persisted (auto-disarm)
+  cfg_autoDisarmEn     = (db.get(DBK_AUTO_DISARM_EN).toInt() != 0);
+  cfg_autoSmart        = (db.get(DBK_AUTO_SMART_EN).toInt() != 0);
+  cfg_autoDisarmUpDeg  = clampf(db.get(DBK_AUTO_DISARM_UP_DEG).toFloat(),   0.0f, 90.0f);
+  cfg_autoDisarmTiltDeg= clampf(db.get(DBK_AUTO_DISARM_TILT_DEG).toFloat(), 0.0f, 90.0f);
+
+  cfg_learnUpDeg       = clampf(db.get(DBK_LEARN_UP_DEG).toFloat(),   0.0f, 90.0f);
+  cfg_learnTiltDeg     = clampf(db.get(DBK_LEARN_TILT_DEG).toFloat(), 0.0f, 90.0f);
+
   espNowEnabled = cfg_espNowEn;
   hubMacValid = false;
-  if (cfg_hubMacStr.length() > 0) {
-    hubMacValid = parseMac(cfg_hubMacStr, hubMacAddr);
-  }
+  if (cfg_hubMacStr.length() > 0) hubMacValid = parseMac(cfg_hubMacStr, hubMacAddr);
 
-  // Wi-Fi must be UP before SettingsGyver
   wifiEnterConfigMode();
 
-  // Settings UI
   sett.begin();
   sett.onBuild(build);
   sett.onUpdate(update);
 
-  // ---- I2C (single init) ----
   if (I2C_SDA_PIN>=0 && I2C_SCL_PIN>=0) Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
   else Wire.begin();
   Wire.setClock(100000);
 
-  // LSM6DS3 init
   if (!lsm6.begin_I2C(LSM6_ADDR)) {
     Serial.println("LSM6DS3 not found");
     imuOK = false;
@@ -989,25 +1200,21 @@ void setup(){
     lsm6.setAccelDataRate(LSM6DS_RATE_104_HZ);
   }
 
-  // Baseline calibration (initial)
   recalibrateBaseline();
 
-  // Apply initial ARMED/DISARMED
   setArmed(cfg_armedSw,false);
   bootMs = millis();
 
-  // Initial battery reading
   g_vbat_V   = readVbat();
   g_batt_pct = vbatToPercent(g_vbat_V);
   lastVbatMs = millis();
 
-  // Initialize power-button debouncer
   uint32_t now = millis();
   bool raw = digitalRead(PIN_BTN_IN);
   pwrBtnStableState  = raw;
   pwrBtnPrevStable   = raw;
   pwrBtnLastChangeMs = now;
-  pwrIgnoreFirstPress = true;  // we powered on via long press
+  pwrIgnoreFirstPress = true;
 }
 
 // ==============================
@@ -1017,28 +1224,21 @@ void loop(){
   sett.tick();
   uint32_t now = millis();
 
-  // Handle power button (PWR_KEY / BTN_IN) first –
-  // long press (~3s) will cut power via PWR_CTRL.
   handlePowerButton();
-
-  // Handle user BUTTON (SW1) for ARM/DISARM
   handleButton(now);
   updateGreenLED();
 
-  // ARMED: after 2 min, turn AP OFF (keep ESP-NOW)
   if (armed && wifiApActiveAfterArm && (now - wifiArmStart >= ARMED_AP_WINDOW_MS)) {
     wifiAfterArmWindow();
     wifiApActiveAfterArm = false;
   }
 
-  // DISARMED: keep AP for grace or while client connected, then deep sleep
   if (!armed){
     bool clientConnected = (WiFi.softAPgetStationNum()>0);
     bool inGrace = (now - bootMs) < DISARMED_AP_GRACE_MS;
     if (!clientConnected && !inGrace) suspendUntilLongPressToArm();
   }
 
-  // Battery refresh + low-battery ESP-NOW alarm
   if (now - lastVbatMs >= VBAT_PERIOD_MS) {
     lastVbatMs = now;
     g_vbat_V   = readVbat();
@@ -1046,7 +1246,6 @@ void loop(){
 
     if (armed && espNowEnabled && espNowInited && hubMacValid) {
       if (!lowBattReported && g_batt_pct <= LOW_BATT_THRESHOLD_PCT) {
-        // 3 = low-battery event
         sendBitePacket(3);
         lowBattReported = true;
       } else if (lowBattReported && g_batt_pct > LOW_BATT_THRESHOLD_PCT + LOW_BATT_HYSTERESIS) {
@@ -1055,22 +1254,49 @@ void loop(){
     }
   }
 
-  if (!armed) return;  // disarmed path handled above
+  if (!armed) return;
 
-  // Motion sampling
   if (now - lastSample >= SAMPLE_INTERVAL_MS){
     lastSample = now;
+
     if (imuOK){
       sensors_event_t accel, gyro, temp;
       if (lsm6.getEvent(&accel, &gyro, &temp)) {
+
         float gx = accel.acceleration.x / MS2_PER_G;
         float gy = accel.acceleration.y / MS2_PER_G;
         float gz = accel.acceleration.z / MS2_PER_G;
+
+        gravF.x = MOVE_GRAV_ALPHA*gravF.x + (1.0f - MOVE_GRAV_ALPHA)*gx;
+        gravF.y = MOVE_GRAV_ALPHA*gravF.y + (1.0f - MOVE_GRAV_ALPHA)*gy;
+        gravF.z = MOVE_GRAV_ALPHA*gravF.z + (1.0f - MOVE_GRAV_ALPHA)*gz;
 
         float mag = mag3(gx,gy,gz);
         baselineMagG = baselineMagG*0.999f + mag*0.001f;
         float d = fabsf(mag - baselineMagG);
         g_lastDelta = d;
+
+        if (cfg_autoDisarmEn && cfg_autoSmart && (g_learnState != LEARN_NONE)) {
+          learnTick(now, gravF, d);
+
+          stopPulse();
+          inMotion = false;
+          consecutiveTriggers = 0;
+          return;
+        }
+
+        if (cfg_autoDisarmEn && !cfg_autoSmart && !oriBaseValid && accelMagOk(gravF) && (d < (cfg_deltaG * 0.60f))) {
+          gravityToPitchRoll(gravF, basePitchDeg, baseRollDeg);
+          oriBaseValid = true;
+          moveOverSince = 0;
+          Serial.printf("AUTO-DISARM: baseline captured (manual) pitch=%.1f roll=%.1f\n", basePitchDeg, baseRollDeg);
+        }
+
+        if (cfg_autoDisarmEn && checkAutoDisarmMove(now, gravF)) {
+          Serial.println("AUTO-DISARM: rod moved -> disarm");
+          setArmed(false, false);
+          return;
+        }
 
         if (d >= cfg_deltaG){ if (consecutiveTriggers<255) consecutiveTriggers++; }
         else if (consecutiveTriggers>0) consecutiveTriggers--;
@@ -1078,7 +1304,7 @@ void loop(){
         bool motionNow = (consecutiveTriggers >= TRIGGER_SAMPLES);
         if (motionNow && !inMotion){
           inMotion = true; motionStartMs = now;
-          startPulse(now, 1);   // 1 = first / short
+          startPulse(now, 1);
         } else if (!motionNow && inMotion){
           inMotion = false;
         }
@@ -1086,14 +1312,13 @@ void loop(){
     }
   }
 
-  // Pulse engine
   if (pulseOn && (int32_t)(now - pulseOffAt) >= 0) stopPulse();
 
   if (inMotion){
     uint32_t motionDur = now - motionStartMs;
     if (motionDur >= cfg_contThresh){
       if (!pulseOn && (now - lastPulseStart) >= cfg_pulsePeriod){
-        startPulse(now, 2);    // 2 = continuous
+        startPulse(now, 2);
       }
     }
   }

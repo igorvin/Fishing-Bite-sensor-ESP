@@ -124,7 +124,7 @@ The system includes a **web configuration UI** (SettingsGyver), supports **persi
   - Displays both **voltage** and **%** in the Status section.
   - LED color indicator: green / yellow / red depending on remaining charge.
 
----
+----
 
 <p align="center">
   <img src="./img/Auto Disarm functionality.png" width="300" alt="Auto Disarm functionality">
