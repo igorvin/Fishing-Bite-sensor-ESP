@@ -127,7 +127,7 @@ The system includes a **web configuration UI** (SettingsGyver), supports **persi
 ----
 
 <p align="center">
-  <img src="./img/Auto Disarm functionality.png" width="300" alt="Auto Disarm functionality">
+  <img src="./img/Auto Disarm functionality.png" width="600" alt="Auto Disarm functionality">
   </p>
   
 ## 🧠 Auto-disarm (Smart) — User Flow
