@@ -295,7 +295,7 @@ The ESP creates an **Access Point** using the configured Sensor name as SSID and
 |------|--------|--------|------|
 | **Power-up / DISARMED** | Green OFF | 2 short beeps on disarm | AP ON, can configure |
 | **ARMED** | Green ON (PWM) | 1 long beep | Motion detection active |
-| **ARMED (Smart Learn)** | Green ON (PWM) | short beeps at learn markers | First 20s: 10s normal + 10s moved; bite alarms suppressed |
+| **ARMED (Smart Learn)** | Green ON (PWM) | 3 short beeps when learning finishes (short beeps at phase markers) | First 20s: 10s normal + 10s moved; bite alarms suppressed |
 | **Short vibration** | Red flash (PWM) | Short beep | Sends ESP-NOW `eventType = 1` |
 | **Continuous vibration** | Repeated red flashes | Periodic beeps | Sends ESP-NOW `eventType = 2` |
 | **Rod moved / picked up** | Green OFF | Two short beeps (disarm) | Auto-disarm triggers to avoid noise |
@@ -325,6 +325,8 @@ The ESP creates an **Access Point** using the configured Sensor name as SSID and
    - Green LED ON, long beep.
    - If Smart-detection ON:
      - Wait 10s (NORMAL), then move rod for 10s (MOVED).
+     - **Learning finished signal:** the buzzer plays **3 short beeps**.
+     - **Already calibrated once?** If your rod/stand placement is the same, you can keep the rod still during the MOVED phase — the firmware will **reuse the last learned thresholds** (or fall back to defaults on the very first run).
      - Bite alarms suppressed during these 20 seconds.
    - AP available for 2 minutes, then turns off.
 6. Move/shake the rod:
