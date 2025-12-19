@@ -4,33 +4,20 @@
   - UI/Settings:   GyverDBFile + SettingsGyver
   - Storage:       LittleFS
   - ESP-NOW:       Sends alarms to central ESP hub
-  - Features:
-      * Soft power-latch:
-          - Q4 AO3407 + Q5 AO3400A + SW2 (PWR_KEY)
-          - MCU holds power via PWR_CTRL pin
-          - Long press PWR_KEY (~3 s) -> clean power OFF
-      * ARMED/DISARMED (long-press BUTTON, SW1)
-      * Green LED = armed (PWM brightness)
-      * Red LED + buzzer pulses on motion (PWM volume/brightness)
-      * Long beep when armed, two short when disarmed
-      * DISARMED → deep-sleep after grace period
-      * Persistent AP SSID/password via Settings
-      * Language dropdown: English / Русский
-      * Power save: CPU at 80 MHz, Wi-Fi AP OFF in ARMED after 2 min
-      * Battery monitor: % + voltage via ADC divider (100k/100k + 100nF)
-      * Low-battery alarm over ESP-NOW (eventType = 3)
-      * Web "Calibrate baseline & test alarm" button
-      * Automatic baseline recalibration on disarm
 
-  - Auto-disarm (anti-noise) [NO SMART-LEARNING]
-      * Master enable ON/OFF
-      * Auto Detect:
-          ON  -> fixed UP=25°, TILT=35°, HOLD=120ms
-          OFF -> manual sliders UP/TILT/HOLD
-      * Improvements:
-          - ARM warmup 1.5s prevents instant false alarms
-          - Baseline orientation capture is simple & reliable
-          - Minimum time after ARM before auto-disarm can disarm
+  UI change (Status group):
+    - State: keep
+    - remove all "led" rows
+    - Accelerometer: OK green / ERROR red (text color)
+    - remove Language row from Status
+    - Battery and Δg: keep
+    - Uptime shows minutes
+
+  Option A implemented:
+    - Menu selector splits UI into 3 pages:
+        0) Status
+        1) Sensor
+        2) Network
 ********************************************************/
 
 #include <Arduino.h>
@@ -186,11 +173,15 @@ SettingsGyver sett("Fishing Bite Sensor", &db);
 // LOCALIZATION
 // ==============================
 struct LangPack {
+  const char* grpMenu;
   const char* grpGeneral;
   const char* grpSensor;
   const char* grpWiFi;
   const char* grpStatus;
   const char* grpEspNow;
+
+  const char* lblMenu;
+  const char* menuItems;
 
   const char* lblLanguage;
   const char* langHint;
@@ -228,11 +219,13 @@ struct LangPack {
 };
 
 const LangPack LANG_EN = {
+  "Menu",
   "General","Sensor","Wireless settings","Status","ESP-NOW",
-  "Language","(English / Русский)",
+  "Menu", "Status\nSensor\nSettings",
+  "Language","(English / Русский)`",
   "Sensitivity \xCE\x94g","Short pulse","Pulse period","Continuous threshold","Armed (web toggle)",
   "Sensor name (AP SSID)","AP password (Min 8 chars.)","Save & Restart",
-  "State","Accelerometer","\xCE\x94g","Alerts","Uptime (s)","Battery",
+  "State","Accelerometer","\xCE\x94g","Alerts","Uptime (min)","Battery",
   "Enable ESP-NOW","Hub MAC (xx:xx..)","Calibrate baseline & test alarm",
   "ARMED","DISARMED","OK","ERROR",
   "Sensor name / SSID (1..32 chars.)",
@@ -243,11 +236,13 @@ const LangPack LANG_EN = {
 };
 
 const LangPack LANG_RU = {
+  "Меню",
   "Общие","Датчик","Настройки Wi-Fi","Статус","ESP-NOW",
+  "Меню", "Статус\nДатчик\nНастройки",
   "Язык","(Русский / English)",
   "Чувствительность Δg","Короткий импульс","Период импульсов","Порог непрерывности","Охрана (веб-переключатель)",
   "Имя датчика (SSID AP)","Пароль AP (мин. 8 симв.)","Сохранить и перезагрузить",
-  "Состояние","Акселерометр","Δg","Срабатывания","Время работы (с)","Батарея",
+  "Состояние","Акселерометр","Δg","Срабатывания","Время работы (мин)","Батарея",
   "Включить ESP-NOW","MAC хаба (XX:XX..)","Калибровка базы + тест",
   "ОХРАНА","СНЯТО","ОК","ОШИБКА",
   "Имя датчика / SSID 1–32 символов",
@@ -267,12 +262,19 @@ int      cfg_langIdx=0;      // 0=EN, 1=RU
 bool     cfg_langRu=false;
 int      g_prevLangIdx=-1;
 
+inline const LangPack& L(){ return cfg_langRu?LANG_RU:LANG_EN; }
+
 // Output settings
 uint16_t cfg_buzVolPct   = 100;
 uint16_t cfg_ledRedPct   = 100;
 uint16_t cfg_ledGreenPct = 100;
 
-inline const LangPack& L(){ return cfg_langRu?LANG_RU:LANG_EN; }
+// ==============================
+// MENU PAGES (Option A)
+// ==============================
+static const char* DBK_UI_PAGE = "ui_page";
+uint8_t ui_page = 0;  // 0=Status, 1=Sensor, 2=Network
+static const size_t UI_PAGE = 2000;
 
 // ==============================
 // AUTO-DISARM UI/DB (string keys)
@@ -289,22 +291,15 @@ float    cfg_autoUpDeg    = 25.0f;    // used when autoDetect OFF
 float    cfg_autoTiltDeg  = 35.0f;    // used when autoDetect OFF
 uint16_t cfg_autoHoldMs   = 120;      // used when autoDetect OFF
 
-// ==============================
-// AUTO-DISARM (simple + reliable)
-// ==============================
 // Fixed params when Auto Detect = ON
 static const float    FIX_UP_DEG   = 25.0f;
 static const float    FIX_TILT_DEG = 35.0f;
 static const uint16_t FIX_HOLD_MS  = 120;
 
-// Minimum time after ARM before auto-disarm can disarm
 static const uint32_t AUTO_DISARM_MIN_ARM_MS = 4000;
-
-// Baseline capture requirements
 static const uint32_t BASELINE_STABLE_MS  = 600;
 static const float    BASELINE_DELTA_K    = 0.60f;
 
-// Orientation math state
 struct Vec3 { float x,y,z; };
 static Vec3  gravF = {0,0,1};
 
@@ -315,9 +310,7 @@ static float    baseRollDeg  = 0.0f;
 static uint32_t baselineStableSince = 0;
 static uint32_t moveOverSince = 0;
 
-// gravity filter + mag gate
 const float    MOVE_GRAV_ALPHA = 0.94f;
-const uint32_t MOVE_HOLD_MS_UNUSED = 120; // (we use per-mode holdMs, keep for reference)
 const float    MOVE_MAG_MIN_G  = 0.75f;
 const float    MOVE_MAG_MAX_G  = 1.25f;
 
@@ -521,9 +514,6 @@ void wifiAfterArmWindow() {
 // ==============================
 // ALERT PULSES / LEDS
 // ==============================
-inline uint16_t buzzerDuty();
-inline uint8_t  ledDuty(uint16_t pct);
-
 inline void stopPulse(){
   pulseOn=false;
   buzzStop();
@@ -693,7 +683,6 @@ static bool checkAutoDisarmMove(uint32_t now, const Vec3& gNow) {
   if (!oriBaseValid) return false;
   if (armWarmup) return false;
 
-  // minimum time after ARM
   if (now - armAtMs < AUTO_DISARM_MIN_ARM_MS) return false;
 
   if (!accelMagOk(gNow)) {
@@ -772,17 +761,14 @@ void setArmed(bool v,bool deepSleep){
 
     if (espNowEnabled && hubMacValid) espNowBegin();
 
-    // Auto-disarm reset
     resetAutoDisarm();
 
-    // ARM warmup
     armAtMs = millis();
     armWarmup = true;
     warmupCnt = 0;
     warmupSumMag = 0.0f;
     gravInited = false;
 
-    // extra safety
     stopPulse();
     inMotion = false;
     consecutiveTriggers = 0;
@@ -819,99 +805,110 @@ static const size_t UI_AUTO_TILT        = 1303;
 static const size_t UI_AUTO_HOLD        = 1304;
 static const size_t UI_AUTO_INFO        = 1305;
 
-// UI holders
+// UI holders (Status group cleaned)
 #define H_stateLbl    H(stateLbl)
+#define H_accelLbl    H(accelLbl)
+#define H_battLbl     H(battLbl)
 #define H_deltaLbl    H(deltaLbl)
 #define H_alertsLbl   H(alertsLbl)
 #define H_uptimeLbl   H(uptimeLbl)
-#define H_stateLED    H(stateLED)
-#define H_accelLED    H(accelLED)
-#define H_accelLbl    H(accelLbl)
-#define H_langLED     H(langLED)
-#define H_langLbl     H(langLbl)
 #define H_langHintLbl H(langHintLbl)
-#define H_battLED     H(battLED)
-#define H_battLbl     H(battLbl)
 
 void build(sets::Builder& b){
   using namespace sets;
 
-  // --- General group ---
+  // ===== MENU PAGE SELECTOR (always on top) =====
   {
-    Group g(b,L().grpGeneral);
-    b.Select(kk::langIdx, L().lblLanguage, "English\nРусский", AnyPtr(&cfg_langIdx));
-    b.Label(H_langHintLbl, L().langHint);
-
-    const char* lblBuz = cfg_langRu ? "Громкость зуммера" : "Buzzer volume";
-    const char* lblLR  = cfg_langRu ? "Яркость красного светодиода" : "Red LED brightness";
-    const char* lblLG  = cfg_langRu ? "Яркость зелёного светодиода" : "Green LED brightness";
-
-    b.Slider(kk::buzVol,     lblBuz, 0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_buzVolPct));
-    b.Slider(kk::ledRedLvl,  lblLR,  0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_ledRedPct));
-    b.Slider(kk::ledGreenLvl,lblLG,  0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_ledGreenPct));
-
-    if (b.Button(kk::testAlarm, L().lblTestAlarm)) testAlarm_f = true;
+    Group g(b, L().grpMenu);
+    b.Select(UI_PAGE, L().lblMenu, L().menuItems, AnyPtr(&ui_page));
   }
 
-  // --- Sensor group ---
-  {
-    Group g(b,L().grpSensor);
+  // ===== PAGE 0: STATUS =====
+  if (ui_page == 0) {
+    // Put test button on Status page (more logical)
+    {
+      Group g(b, L().grpStatus);
 
-    b.Slider(kk::deltaG,      L().lblSensitivity, 0.02f, 1.0f, 0.01f, "",     AnyPtr(&cfg_deltaG));
-    b.Slider(kk::shortPulse,  L().lblShortPulse,  40.0f, 1000.0f, 10.0f, "ms", AnyPtr(&cfg_shortPulseMs));
-    b.Slider(kk::pulsePeriod, L().lblPulsePeriod, 100.0f, 2000.0f, 10.0f, "ms", AnyPtr(&cfg_pulsePeriod));
-    b.Slider(kk::contThresh,  L().lblContThresh,  50.0f, 2000.0f, 10.0f, "ms", AnyPtr(&cfg_contThresh));
-    b.Switch(kk::armedSw, L().lblArmedSwitch);
+      if (b.Button(kk::testAlarm, L().lblTestAlarm)) testAlarm_f = true;
 
-    const char* lblAuto = cfg_langRu ? "Автоснятие сигнализации" : "Auto-disarm";
-    b.Switch(UI_AUTO_DISARM_EN, lblAuto, &cfg_autoDisarmEn);
+      b.Label(H_stateLbl,  L().lblState);
+      b.Label(H_accelLbl,  L().lblAccel);
+      b.Label(H_battLbl,   L().lblBattery);
+      b.Label(H_deltaLbl,  L().lblDeltaG);
+      b.Label(H_alertsLbl, L().lblAlerts);
+      b.Label(H_uptimeLbl, L().lblUptime);
+    }
+  }
 
-    if (cfg_autoDisarmEn) {
-      const char* lblAD = cfg_langRu ? "Авто-детект (фикс. параметры)" : "Auto Detect (fixed params)";
-      b.Switch(UI_AUTO_DETECT, lblAD, &cfg_autoDetect);
+  // ===== PAGE 1: SENSOR =====
+  if (ui_page == 1) {
+    {
+      Group g(b, L().grpSensor);
 
-      if (cfg_autoDetect) {
-        String info = String("Fixed: UP=") + String((int)FIX_UP_DEG) +
-                      "°, TILT=" + String((int)FIX_TILT_DEG) +
-                      "°, HOLD=" + String((int)FIX_HOLD_MS) + "ms";
-        b.Label(UI_AUTO_INFO, info);
-      } else {
-        const char* lblUp   = cfg_langRu ? "UP (градусы, 0=выкл.)"   : "UP (deg, 0=OFF)";
-        const char* lblTilt = cfg_langRu ? "TILT (градусы, 0=выкл.)" : "TILT (deg, 0=OFF)";
-        const char* lblHold = cfg_langRu ? "HOLD (мс)"               : "HOLD (ms)";
+      b.Slider(kk::deltaG,      L().lblSensitivity, 0.02f, 1.0f, 0.01f, "",     AnyPtr(&cfg_deltaG));
+      b.Slider(kk::shortPulse,  L().lblShortPulse,  40.0f, 1000.0f, 10.0f, "ms", AnyPtr(&cfg_shortPulseMs));
+      b.Slider(kk::pulsePeriod, L().lblPulsePeriod, 100.0f, 2000.0f, 10.0f, "ms", AnyPtr(&cfg_pulsePeriod));
+      b.Slider(kk::contThresh,  L().lblContThresh,  50.0f, 2000.0f, 10.0f, "ms", AnyPtr(&cfg_contThresh));
 
-        b.Slider(UI_AUTO_UP,   lblUp,   0.0f, 90.0f, 1.0f, "deg", AnyPtr(&cfg_autoUpDeg));
-        b.Slider(UI_AUTO_TILT, lblTilt, 0.0f, 90.0f, 1.0f, "deg", AnyPtr(&cfg_autoTiltDeg));
-        b.Slider(UI_AUTO_HOLD, lblHold, 50.0f, 2000.0f, 10.0f, "ms", AnyPtr(&cfg_autoHoldMs));
+      b.Switch(kk::armedSw, L().lblArmedSwitch);
+
+      const char* lblAuto = cfg_langRu ? "Автоснятие сигнализации" : "Auto-disarm";
+      b.Switch(UI_AUTO_DISARM_EN, lblAuto, &cfg_autoDisarmEn);
+
+      if (cfg_autoDisarmEn) {
+        const char* lblAD = cfg_langRu ? "Авто-детект (фикс. параметры)" : "Auto Detect (fixed params)";
+        b.Switch(UI_AUTO_DETECT, lblAD, &cfg_autoDetect);
+
+        if (cfg_autoDetect) {
+          String info = String("Fixed: UP=") + String((int)FIX_UP_DEG) +
+                        "°, TILT=" + String((int)FIX_TILT_DEG) +
+                        "°, HOLD=" + String((int)FIX_HOLD_MS) + "ms";
+          b.Label(UI_AUTO_INFO, info);
+        } else {
+          const char* lblUp   = cfg_langRu ? "UP (градусы, 0=выкл.)"   : "UP (deg, 0=OFF)";
+          const char* lblTilt = cfg_langRu ? "TILT (градусы, 0=выкл.)" : "TILT (deg, 0=OFF)";
+          const char* lblHold = cfg_langRu ? "HOLD (мс)"               : "HOLD (ms)";
+
+          b.Slider(UI_AUTO_UP,   lblUp,   0.0f, 90.0f, 1.0f, "deg", AnyPtr(&cfg_autoUpDeg));
+          b.Slider(UI_AUTO_TILT, lblTilt, 0.0f, 90.0f, 1.0f, "deg", AnyPtr(&cfg_autoTiltDeg));
+          b.Slider(UI_AUTO_HOLD, lblHold, 50.0f, 2000.0f, 10.0f, "ms", AnyPtr(&cfg_autoHoldMs));
+        }
       }
     }
   }
 
-  // --- ESP-NOW group ---
-  {
-    Group g(b, L().grpEspNow);
-    b.Switch(kk::espNowEn, L().lblEspNowEnable);
-    b.Input(kk::hubMac, L().lblHubMac);
-  }
+  // ===== PAGE 2: NETWORK (General + ESP-NOW + Wi-Fi) =====
+  if (ui_page == 2) {
+    // --- General group ---
+    {
+      Group g(b, L().grpGeneral);
 
-  // --- Wi-Fi group ---
-  {
-    Group g(b,L().grpWiFi);
-    b.Input(kk::name,  L().lblName);
-    b.Pass (kk::apPass,L().lblApPass);
-    if (b.Button(kk::saveRB, L().lblSaveRestart)) saveReboot_f = true;
-  }
+      b.Select(kk::langIdx, L().lblLanguage, "English\nРусский", AnyPtr(&cfg_langIdx));
+      b.Label(H_langHintLbl, L().langHint);
 
-  // --- Status group ---
-  {
-    Group g(b,L().grpStatus);
-    b.Label(H_stateLbl,  L().lblState);  b.LED(H_stateLED);
-    b.Label(H_accelLbl,  L().lblAccel);  b.LED(H_accelLED);
-    b.LED(H_langLED);                    b.Label(H_langLbl,   L().lblLanguage);
-    b.LED(H_battLED);                    b.Label(H_battLbl,   L().lblBattery);
-    b.Label(H_deltaLbl,   L().lblDeltaG);
-    b.Label(H_alertsLbl,  L().lblAlerts);
-    b.Label(H_uptimeLbl,  L().lblUptime);
+      const char* lblBuz = cfg_langRu ? "Громкость зуммера" : "Buzzer volume";
+      const char* lblLR  = cfg_langRu ? "Яркость красного светодиода" : "Red LED brightness";
+      const char* lblLG  = cfg_langRu ? "Яркость зелёного светодиода" : "Green LED brightness";
+
+      b.Slider(kk::buzVol,      lblBuz, 0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_buzVolPct));
+      b.Slider(kk::ledRedLvl,   lblLR,  0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_ledRedPct));
+      b.Slider(kk::ledGreenLvl, lblLG,  0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_ledGreenPct));
+    }
+
+    // --- ESP-NOW group ---
+    {
+      Group g(b, L().grpEspNow);
+      b.Switch(kk::espNowEn, L().lblEspNowEnable);
+      b.Input(kk::hubMac, L().lblHubMac);
+    }
+
+    // --- Wi-Fi group ---
+    {
+      Group g(b, L().grpWiFi);
+      b.Input(kk::name,  L().lblName);
+      b.Pass (kk::apPass,L().lblApPass);
+      if (b.Button(kk::saveRB, L().lblSaveRestart)) saveReboot_f = true;
+    }
   }
 }
 
@@ -924,6 +921,10 @@ void update(sets::Updater& u){
   db.set(kk::buzVol,      (int)cfg_buzVolPct);
   db.set(kk::ledRedLvl,   (int)cfg_ledRedPct);
   db.set(kk::ledGreenLvl, (int)cfg_ledGreenPct);
+
+  // Save menu page (Option A)
+  if (ui_page > 2) ui_page = 0;
+  db.set(DBK_UI_PAGE, (int)ui_page);
 
   // Auto-disarm settings
   db.set(DBK_AUTO_DISARM_EN, (int)(cfg_autoDisarmEn ? 1 : 0));
@@ -996,39 +997,34 @@ void update(sets::Updater& u){
     }
   }
 
-  // Web "Calibrate baseline & test alarm" button
+  // Web "Calibrate baseline & test alarm" button (now located on Status page)
   if (testAlarm_f) {
     testAlarm_f = false;
     recalibrateBaseline();
     startTestPulse();
   }
 
-  // ---- Status ----
+  // ---- Status (CLEANED) ----
   u.update(H_stateLbl, armed ? String(L().valArmed) : String(L().valDisarmed));
-  u.updateColor(H_stateLED, armed ? sets::Colors::Aqua : sets::Colors::Pink);
 
+  // Accelerometer: OK green / ERROR red
   u.update(H_accelLbl, imuOK ? String(L().valAccelOK) : String(L().valAccelErr));
-  u.updateColor(H_accelLED, imuOK ? sets::Colors::Green : sets::Colors::Red);
-
-  u.update(H_langLbl, cfg_langRu ? String("Русский") : String("English"));
-  u.updateColor(H_langLED, cfg_langRu ? sets::Colors::Yellow : sets::Colors::Blue);
+  u.updateColor(H_accelLbl, imuOK ? sets::Colors::Green : sets::Colors::Red);
 
   // Battery
   {
     String txt = String(g_batt_pct) + "% (" + String(g_vbat_V, 2) + " V)";
     u.update(H_battLbl, txt);
-
-    sets::Colors col =
-      (g_batt_pct >= 60) ? sets::Colors::Green :
-      (g_batt_pct >= 30) ? sets::Colors::Yellow :
-                           sets::Colors::Red;
-
-    u.updateColor(H_battLED, col);
   }
 
+  // Δg
   u.update(H_deltaLbl,  String(g_lastDelta, 3));
+
+  // Alerts
   u.update(H_alertsLbl, (int)g_alerts);
-  u.update(H_uptimeLbl, (uint32_t)(millis() / 1000));
+
+  // Uptime in minutes
+  u.update(H_uptimeLbl, (uint32_t)(millis() / 60000));
 
   updateGreenLED();
 }
@@ -1100,12 +1096,17 @@ void setup(){
   db.init(kk::hubMac,      cfg_hubMacStr);
   db.init(kk::testAlarm,   0);
 
-  // Defaults (string keys for auto-disarm)
+  // Defaults (string keys)
   db.init(DBK_AUTO_DISARM_EN, 1);
   db.init(DBK_AUTO_DETECT,    1);
   db.init(DBK_AUTO_UP_DEG,    cfg_autoUpDeg);
   db.init(DBK_AUTO_TILT_DEG,  cfg_autoTiltDeg);
   db.init(DBK_AUTO_HOLD_MS,   (int)cfg_autoHoldMs);
+
+  // Menu page default + load
+  db.init(DBK_UI_PAGE, 0);
+  ui_page = (uint8_t)db.get(DBK_UI_PAGE).toInt();
+  if (ui_page > 2) ui_page = 0;
 
   // Load persisted (DB_KEYS)
   cfg_name         = db.get(kk::name).toString();
@@ -1264,7 +1265,7 @@ void loop(){
     return;
   }
 
-  // Auto-disarm baseline capture (easy + reliable)
+  // Auto-disarm baseline capture
   autoDisarmCaptureBaseline(now, gravF, d);
 
   // Auto-disarm trigger
