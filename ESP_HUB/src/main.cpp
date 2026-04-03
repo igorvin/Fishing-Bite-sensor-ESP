@@ -1,15 +1,22 @@
 /*******************************************************
   ESP-NOW Hub for Fishing Bite Sensor (SH1106 OLED version)
-  UI v2:
-    - Status bar (HUB + dot + battery)
+  Board: Seeed XIAO ESP32-S3
+
+  Features:
+    - ESP-NOW receiver always active
     - Alert screen: rod name centered + event label
-    - One-time invert flash on new alert
     - Progress bar during ALERT_HOLD_MS
-    - Idle screen: clean "WAITING..." and MAC (small)
+    - Idle screen: "WAITING..." + MAC
+    - OLED dims after 1 min inactivity
+    - OLED turns OFF after 2 min inactivity
+    - Green LED solid ON in normal mode
+    - Green LED heartbeat blink every 10 sec in sleep mode
+      (sleep mode here = OLED_OFF, ESP-NOW still active)
+    - Vibration motor alert on bite
 
   Notes:
-    - 1.3" I2C OLED is often SH1106 (132x64 internal RAM)
-    - Auto-detect OLED addr 0x3C/0x3D (7-bit)
+    - 1.3" I2C OLED is often SH1106
+    - Auto-detect OLED addr 0x3C/0x3D
 ********************************************************/
 
 #include <Arduino.h>
@@ -22,7 +29,7 @@
 #include <Adafruit_SH110X.h>
 
 // =======================
-// Display config (SH1106 128x64 I2C)
+// Display config
 // =======================
 #define SCREEN_WIDTH  128
 #define SCREEN_HEIGHT 64
@@ -30,9 +37,9 @@
 
 Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-// SH1106 contrast values (0..255)
+// SH1106 contrast values
 static const uint8_t OLED_CONTRAST_ON  = 0xFF;
-static const uint8_t OLED_CONTRAST_DIM = 0x20; // tune 0x10..0x40
+static const uint8_t OLED_CONTRAST_DIM = 0x20;   // tune if needed
 
 // =======================
 // I2C pins (XIAO family)
@@ -46,7 +53,7 @@ static const uint8_t OLED_CONTRAST_DIM = 0x20; // tune 0x10..0x40
 #endif
 
 // =======================
-// Battery ADC config (HUB)
+// Battery ADC config
 // =======================
 #define VBAT_PIN        A0
 const float    VBAT_VREF      = 3.30f;
@@ -59,6 +66,83 @@ const uint32_t VBAT_PERIOD_MS = 5000;
 float    g_vbat_V   = 0.0f;
 int      g_battPct  = 0;
 uint32_t lastBatMs  = 0;
+
+// =======================
+// Status LED
+// =======================
+#define LED_GREEN_PIN         D1       // <-- change if needed
+const uint32_t LED_BLINK_PERIOD_MS = 10000;   // blink every 10 sec
+const uint32_t LED_BLINK_ON_MS     = 80;      // short heartbeat blink
+
+uint32_t lastLedBlinkMs   = 0;
+uint32_t ledBlinkStartMs  = 0;
+bool     ledBlinkActive   = false;
+
+// If your LED is active LOW, invert these two functions
+void ledOn()  { digitalWrite(LED_GREEN_PIN, HIGH); }
+void ledOff() { digitalWrite(LED_GREEN_PIN, LOW);  }
+
+// =======================
+// Vibration motor
+// =======================
+#define MOTOR_PIN              D2      // <-- change if needed
+
+const uint32_t MOTOR_BITE_MS   = 300;  // eventType 1
+const uint32_t MOTOR_RUN_MS    = 800;  // eventType 2
+const uint32_t MOTOR_LOWBAT_MS = 150;  // eventType 3
+const uint32_t MOTOR_GAP_MS    = 120;  // gap for double pulse on low batt
+
+bool     motorActive = false;
+uint32_t motorOffMs = 0;
+
+bool     motorSecondPulsePending = false;
+uint32_t motorSecondPulseStartMs = 0;
+
+// If motor driver transistor is active LOW, invert these functions
+void motorOn()  { digitalWrite(MOTOR_PIN, HIGH); }
+void motorOff() { digitalWrite(MOTOR_PIN, LOW);  }
+
+void startMotorPulse(uint32_t durationMs) {
+  motorOn();
+  motorActive = true;
+  motorOffMs = millis() + durationMs;
+}
+
+void startMotorPattern(uint8_t eventType) {
+  motorSecondPulsePending = false;
+
+  switch (eventType) {
+    case 1:   // BITE
+      startMotorPulse(MOTOR_BITE_MS);
+      break;
+
+    case 2:   // RUN
+      startMotorPulse(MOTOR_RUN_MS);
+      break;
+
+    case 3:   // LOW BAT
+      startMotorPulse(MOTOR_LOWBAT_MS);
+      motorSecondPulsePending = true;
+      motorSecondPulseStartMs = millis() + MOTOR_LOWBAT_MS + MOTOR_GAP_MS;
+      break;
+
+    default:
+      startMotorPulse(MOTOR_BITE_MS);
+      break;
+  }
+}
+
+void handleMotor(uint32_t now) {
+  if (motorActive && (int32_t)(now - motorOffMs) >= 0) {
+    motorOff();
+    motorActive = false;
+  }
+
+  if (motorSecondPulsePending && (int32_t)(now - motorSecondPulseStartMs) >= 0) {
+    motorSecondPulsePending = false;
+    startMotorPulse(MOTOR_LOWBAT_MS);
+  }
+}
 
 // =======================
 // Packet from sensor
@@ -85,7 +169,7 @@ uint8_t g_oledAddr = 0x3C;
 uint8_t g_lastEventType = 0;
 String  g_lastRodShown;
 
-// progress bar refresh throttle
+// Progress bar refresh throttle
 uint32_t lastProgressDrawMs = 0;
 const uint32_t PROGRESS_REFRESH_MS = 200;
 
@@ -93,9 +177,13 @@ const uint32_t PROGRESS_REFRESH_MS = 200;
 enum OledState : uint8_t { OLED_ON, OLED_DIM, OLED_OFF };
 OledState g_oledState = OLED_ON;
 
-const uint32_t OLED_DIM_TIMEOUT_MS = 30000;
-const uint32_t OLED_OFF_TIMEOUT_MS = 60000;
+// Inactivity timers
+const uint32_t OLED_DIM_TIMEOUT_MS  = 60000;    // 1 minute
+const uint32_t OLED_OFF_TIMEOUT_MS  = 120000;   // 2 minutes
 uint32_t lastActivityMs = 0;
+
+// Top header height
+static const int STATUS_H = 18;
 
 // =======================
 // I2C helpers
@@ -116,8 +204,10 @@ static uint8_t detectOLEDAddress() {
 // =======================
 float readVbat() {
   uint32_t acc = 0;
-  analogRead(VBAT_PIN);
-  for (int i = 0; i < (int)VBAT_SAMPLES; i++) acc += analogRead(VBAT_PIN);
+  analogRead(VBAT_PIN);  // dummy read
+  for (int i = 0; i < (int)VBAT_SAMPLES; i++) {
+    acc += analogRead(VBAT_PIN);
+  }
   float adc = acc / float(VBAT_SAMPLES);
   return (adc / VBAT_ADC_MAX) * VBAT_VREF * VBAT_DIV * VBAT_CAL;
 }
@@ -137,7 +227,7 @@ int vbatToPercent(float v) {
 }
 
 // =======================
-// ESP-NOW callback (IDF4 vs IDF5 compatible)
+// ESP-NOW callback
 // =======================
 #if ESP_IDF_VERSION_MAJOR >= 5
 void onEspNowRecv(const esp_now_recv_info* info, const uint8_t* data, int len) {
@@ -156,7 +246,7 @@ void onEspNowRecv(const uint8_t* mac, const uint8_t* data, int len) {
 #endif
 
 // =======================
-// OLED low-level helpers (contrast + power)
+// OLED low-level helpers
 // =======================
 static void oledSetContrast(uint8_t val) {
   display.oled_command(0x81);
@@ -167,65 +257,91 @@ static void oledOn()  { display.oled_command(SH110X_DISPLAYON); }
 static void oledOff() { display.oled_command(SH110X_DISPLAYOFF); }
 
 // =======================
-// OLED power helpers
+// Activity helpers
 // =======================
+void markActivity() {
+  lastActivityMs = millis();
+}
+
 void wakeDisplay() {
-  if (g_oledState == OLED_OFF) oledOn();
+  if (g_oledState == OLED_OFF) {
+    oledOn();
+    delay(5);
+  }
   oledSetContrast(OLED_CONTRAST_ON);
   g_oledState = OLED_ON;
-  lastActivityMs = millis();
 }
 
 void maybeDimOrOff() {
   uint32_t now = millis();
   uint32_t idle = now - lastActivityMs;
 
-  if (g_oledState == OLED_ON && idle > OLED_DIM_TIMEOUT_MS) {
+  if (g_oledState == OLED_ON && idle >= OLED_DIM_TIMEOUT_MS) {
     oledSetContrast(OLED_CONTRAST_DIM);
     g_oledState = OLED_DIM;
   }
-  if (g_oledState != OLED_OFF && idle > OLED_OFF_TIMEOUT_MS) {
+
+  if (g_oledState != OLED_OFF && idle >= OLED_OFF_TIMEOUT_MS) {
     oledOff();
     g_oledState = OLED_OFF;
   }
 }
 
 // =======================
-// Battery icon (top-right)
+// LED behavior
 // =======================
-void drawBatteryIconFancy(int pct) {
-  const int x = SCREEN_WIDTH - 24;
-  const int y = 1;
+void handleStatusLed(uint32_t now) {
+  // Normal / dim display -> LED solid ON
+  if (g_oledState == OLED_ON || g_oledState == OLED_DIM) {
+    ledOn();
+    ledBlinkActive = false;
+    return;
+  }
 
+  // OLED_OFF -> heartbeat blink every 10 sec
+  if (g_oledState == OLED_OFF) {
+    if (!ledBlinkActive && (now - lastLedBlinkMs >= LED_BLINK_PERIOD_MS)) {
+      ledOn();
+      ledBlinkActive = true;
+      ledBlinkStartMs = now;
+      lastLedBlinkMs = now;
+    }
+
+    if (ledBlinkActive && (now - ledBlinkStartMs >= LED_BLINK_ON_MS)) {
+      ledOff();
+      ledBlinkActive = false;
+    }
+  }
+}
+
+// =======================
+// Battery icon
+// =======================
+void drawBatteryIconFancy(int pct, uint16_t color) {
+  const int x     = SCREEN_WIDTH - 24;
+  const int y     = 4;
   const int bodyW = 18;
   const int bodyH = 10;
   const int termW = 3;
   const int termH = 4;
 
-  display.drawRect(x, y, bodyW, bodyH, SH110X_WHITE);
-  display.drawRect(x + 1, y + 1, bodyW - 2, bodyH - 2, SH110X_WHITE);
+  display.drawRect(x, y, bodyW, bodyH, color);
+  display.fillRect(x + bodyW, y + (bodyH - termH) / 2, termW, termH, color);
 
-  int termX = x + bodyW;
-  int termY = y + (bodyH - termH) / 2;
-  display.fillRect(termX, termY, termW, termH, SH110X_WHITE);
+  const int fillX = x + 2;
+  const int fillY = y + 2;
+  const int fillW = bodyW - 4;
+  const int fillH = bodyH - 4;
+  const int bars  = 5;
 
-  int fillX = x + 3;
-  int fillY = y + 3;
-  int fillW = bodyW - 6;
-  int fillH = bodyH - 6;
-
-  const int bars = 5;
-  int filledBars = (pct * bars) / 100;
-  if (filledBars < 0) filledBars = 0;
-  if (filledBars > bars) filledBars = bars;
-
+  int filled = constrain((pct * bars) / 100, 0, bars);
   for (int i = 0; i < bars; i++) {
     int bx = fillX + i * (fillW / bars);
     int bw = (fillW / bars) - 1;
     if (bw < 1) bw = 1;
 
-    if (i < filledBars) display.fillRect(bx, fillY, bw, fillH, SH110X_WHITE);
-    else                display.drawRect(bx, fillY, bw, fillH, SH110X_WHITE);
+    if (i < filled) display.fillRect(bx, fillY, bw, fillH, color);
+    else            display.drawRect(bx, fillY, bw, fillH, color);
   }
 }
 
@@ -241,37 +357,54 @@ const char* eventLabel(uint8_t type) {
   }
 }
 
-// Top status bar height
-static const int STATUS_H = 14;
+void drawIdleHeader() {
+  display.fillRect(0, 0, SCREEN_WIDTH, STATUS_H, SH110X_WHITE);
 
-void drawStatusBar(bool connected) {
-  // divider line
-  display.drawFastHLine(0, STATUS_H - 1, SCREEN_WIDTH, SH110X_WHITE);
-
+  display.setTextColor(SH110X_BLACK);
   display.setTextWrap(false);
   display.setTextSize(1);
-  display.setCursor(0, 2);
+  display.setCursor(3, 5);
   display.print("HUB");
 
-  // connection dot
-  if (connected) display.fillCircle(24, 6, 2, SH110X_WHITE);
-  else           display.drawCircle(24, 6, 2, SH110X_WHITE);
+  drawBatteryIconFancy(g_battPct, SH110X_BLACK);
 
-  drawBatteryIconFancy(g_battPct);
+  display.setTextColor(SH110X_WHITE);
 }
 
-// progress bar at bottom
+void drawAlertHeader(uint8_t evtType) {
+  display.fillRect(0, 0, SCREEN_WIDTH, STATUS_H, SH110X_WHITE);
+
+  char label[24];
+  snprintf(label, sizeof(label), "!! %s !!", eventLabel(evtType));
+
+  display.setTextColor(SH110X_BLACK);
+  display.setTextWrap(false);
+  display.setTextSize(1);
+
+  int16_t x1, y1;
+  uint16_t w, h;
+  display.getTextBounds(label, 0, 0, &x1, &y1, &w, &h);
+
+  int16_t x = (SCREEN_WIDTH - (int)w) / 2;
+  if (x < 0) x = 0;
+
+  display.setCursor(x, 5);
+  display.print(label);
+
+  drawBatteryIconFancy(g_battPct, SH110X_BLACK);
+
+  display.setTextColor(SH110X_WHITE);
+}
+
 void drawAlertProgress(uint32_t elapsedMs) {
-  const int barH = 4;
+  const int barH = 8;
   const int y = SCREEN_HEIGHT - barH;
 
-  // clear bar area only
   display.fillRect(0, y, SCREEN_WIDTH, barH, SH110X_BLACK);
 
   uint32_t e = (elapsedMs > ALERT_HOLD_MS) ? ALERT_HOLD_MS : elapsedMs;
   int w = (int)((uint64_t)e * SCREEN_WIDTH / ALERT_HOLD_MS);
-  if (w < 0) w = 0;
-  if (w > SCREEN_WIDTH) w = SCREEN_WIDTH;
+  w = constrain(w, 0, SCREEN_WIDTH);
 
   display.fillRect(0, y, w, barH, SH110X_WHITE);
 }
@@ -279,136 +412,80 @@ void drawAlertProgress(uint32_t elapsedMs) {
 // =======================
 // Screens
 // =======================
-void showIdle() {
+void showIdle(bool resetInactivity = false) {
   wakeDisplay();
+  if (resetInactivity) markActivity();
 
   display.clearDisplay();
-  display.display();
-
   display.setTextColor(SH110X_WHITE);
   display.setTextWrap(false);
 
-  // Status bar
-  drawStatusBar(true);
+  drawIdleHeader();
 
-  // ---- Big center text ----
   display.setTextSize(2);
-  const char* msg = "WAITING";
-  int16_t x1, y1; uint16_t w, h;
+  const char* msg = "WAITING...";
+  int16_t x1, y1;
+  uint16_t w, h;
   display.getTextBounds(msg, 0, 0, &x1, &y1, &w, &h);
 
   int16_t x = (SCREEN_WIDTH - (int)w) / 2;
   if (x < 0) x = 0;
 
-  int16_t yBig = STATUS_H + 10;
-  display.setCursor(x, yBig);
+  display.setCursor(x, STATUS_H + 10);
   display.print(msg);
 
-  // ---- Line A: MAC (full, single line) ----
   display.setTextSize(1);
-  display.setCursor(0, 42);
-  display.print(g_macStr);   // e.g. 94:A9:90:60:F7:94
-
-  // ---- Line B: ESP-NOW ACTIVE ----
-  const char* st = "ESP-NOW ACTIVE";
-  display.getTextBounds(st, 0, 0, &x1, &y1, &w, &h);
-  int16_t xs = (SCREEN_WIDTH - (int)w) / 2;
-  if (xs < 0) xs = 0;
-
-  display.setCursor(xs, 54);
-  display.print(st);
+  display.setCursor(0, 48);
+  display.print(g_macStr);
 
   display.display();
 }
 
-
-
-void showAlertScreen(const String& rodNameIn, uint8_t evtType, bool doFlash) {
+void showAlertScreen(const String& rodNameIn, uint8_t evtType) {
   wakeDisplay();
+  markActivity();
 
-  // HARD clear (flush)
   display.clearDisplay();
-  display.display();
-
   display.setTextColor(SH110X_WHITE);
   display.setTextWrap(false);
 
-  // status bar (no MAC here)
-  drawStatusBar(true);
-
-  // optional flash (only once per new alert)
-  if (doFlash) {
-    display.invertDisplay(true);
-    delay(120);
-    display.invertDisplay(false);
-  }
+  drawAlertHeader(evtType);
 
   String rod = rodNameIn;
   rod.trim();
   if (rod.length() == 0) rod = "UNKNOWN";
 
+  const int PROGRESS_H = 8;
   const int contentTop = STATUS_H + 2;
+  const int contentH   = (SCREEN_HEIGHT - PROGRESS_H) - contentTop;
 
-  // ----- Rod name formatting -----
+  uint8_t textSize;
   if (rod.length() <= 6) {
-    display.setTextSize(3);
-    int16_t x1, y1; uint16_t w, h;
-    display.getTextBounds(rod, 0, 0, &x1, &y1, &w, &h);
-    int16_t x = (SCREEN_WIDTH - (int)w) / 2; if (x < 0) x = 0;
-    int16_t y = contentTop + 6;
-    display.setCursor(x, y);
-    display.print(rod);
-
-  } else if (rod.length() <= 10) {
-    display.setTextSize(2);
-    int16_t x1, y1; uint16_t w, h;
-    display.getTextBounds(rod, 0, 0, &x1, &y1, &w, &h);
-    int16_t x = (SCREEN_WIDTH - (int)w) / 2; if (x < 0) x = 0;
-    int16_t y = contentTop + 10;
-    display.setCursor(x, y);
-    display.print(rod);
-
+    textSize = 3;
   } else {
-    display.setTextSize(2);
-    if (rod.length() > 16) rod = rod.substring(0, 16);
-
-    String l1 = rod.substring(0, 8); l1.trim();
-    String l2 = rod.substring(8);    l2.trim();
-
-    int16_t x1, y1; uint16_t w1, h1;
-    display.getTextBounds(l1, 0, 0, &x1, &y1, &w1, &h1);
-    int16_t xLine1 = (SCREEN_WIDTH - (int)w1) / 2; if (xLine1 < 0) xLine1 = 0;
-
-    uint16_t w2, h2;
-    display.getTextBounds(l2, 0, 0, &x1, &y1, &w2, &h2);
-    int16_t xLine2 = (SCREEN_WIDTH - (int)w2) / 2; if (xLine2 < 0) xLine2 = 0;
-
-    int16_t yLine1 = contentTop + 6;
-    int16_t yLine2 = yLine1 + 18;
-
-    display.setCursor(xLine1, yLine1); display.print(l1);
-    display.setCursor(xLine2, yLine2); display.print(l2);
+    if (rod.length() > 10) rod = rod.substring(0, 10);
+    textSize = 2;
   }
 
-  // ----- Event label (below rod) -----
-  const char* label = eventLabel(evtType);
-  if (label && label[0]) {
-    display.setTextSize(2);
-    int16_t x1, y1; uint16_t w, h;
-    display.getTextBounds(label, 0, 0, &x1, &y1, &w, &h);
-    int16_t x = (SCREEN_WIDTH - (int)w) / 2; if (x < 0) x = 0;
-    display.setCursor(x, STATUS_H + 44);
-    display.print(label);
-  }
+  display.setTextSize(textSize);
 
-  // initial progress bar (0%)
+  int16_t x1, y1;
+  uint16_t w, h;
+  display.getTextBounds(rod.c_str(), 0, 0, &x1, &y1, &w, &h);
+
+  int16_t x = (SCREEN_WIDTH - (int)w) / 2;
+  if (x < 0) x = 0;
+
+  int16_t y = contentTop + (contentH - (int)h) / 2;
+  display.setCursor(x, y);
+  display.print(rod);
+
   drawAlertProgress(0);
-
   display.display();
 }
 
 // =======================
-// Setup / Loop
+// Setup
 // =======================
 void setup() {
   Serial.begin(115200);
@@ -418,6 +495,12 @@ void setup() {
   setCpuFrequencyMhz(80);
 #endif
 
+  pinMode(LED_GREEN_PIN, OUTPUT);
+  ledOff();
+
+  pinMode(MOTOR_PIN, OUTPUT);
+  motorOff();
+
   pinMode(VBAT_PIN, INPUT);
   analogReadResolution(12);
 
@@ -426,13 +509,13 @@ void setup() {
 
   g_oledAddr = detectOLEDAddress();
   if (!g_oledAddr) {
-    Serial.println("❌ OLED not detected at 0x3C/0x3D. Check wiring + ADD_SELECT.");
-    for(;;);
+    Serial.println("OLED not detected at 0x3C/0x3D");
+    while (true) delay(1000);
   }
 
   if (!display.begin(g_oledAddr, true)) {
-    Serial.println("❌ SH1106 init failed");
-    for(;;);
+    Serial.println("SH1106 init failed");
+    while (true) delay(1000);
   }
 
   oledSetContrast(OLED_CONTRAST_ON);
@@ -450,20 +533,25 @@ void setup() {
 
   if (esp_now_init() != ESP_OK) {
     Serial.println("ESP-NOW init failed");
-    for(;;);
+    while (true) delay(1000);
   }
+
   esp_now_register_recv_cb(onEspNowRecv);
 
   g_vbat_V  = readVbat();
   g_battPct = vbatToPercent(g_vbat_V);
   lastBatMs = millis();
 
-  lastActivityMs = millis();
+  markActivity();
   g_oledState = OLED_ON;
 
-  showIdle();
+  showIdle(true);
+  ledOn();
 }
 
+// =======================
+// Loop
+// =======================
 void loop() {
   uint32_t now = millis();
 
@@ -473,15 +561,17 @@ void loop() {
     g_vbat_V  = readVbat();
     g_battPct = vbatToPercent(g_vbat_V);
 
-    // refresh idle to update battery icon (only if not in alert)
-    if (lastAlertMs == 0 && g_oledState != OLED_OFF) {
-      showIdle();
+    // Refresh idle screen only when OLED is fully ON.
+    // This prevents dim mode from being canceled every 5 sec.
+    if (lastAlertMs == 0 && g_oledState == OLED_ON) {
+      showIdle(false);
     }
   }
 
-  // New ESP-NOW alert?
+  // New ESP-NOW alert
   if (g_hasAlert) {
     BitePacket pkt;
+
     noInterrupts();
     memcpy(&pkt, (const void*)&g_lastPkt, sizeof(BitePacket));
     g_hasAlert = false;
@@ -491,40 +581,45 @@ void loop() {
     rod.trim();
     if (!rod.length()) rod = "UNKNOWN";
 
-    Serial.print("Alert from: "); Serial.print(rod);
-    Serial.print(" type=");       Serial.print(pkt.eventType);
-    Serial.print(" batt=");       Serial.print(pkt.batteryPct);
-    Serial.print("% dG=");        Serial.println(pkt.deltaG, 3);
+    Serial.print("Alert from: ");
+    Serial.print(rod);
+    Serial.print(" type=");
+    Serial.print(pkt.eventType);
+    Serial.print(" batt=");
+    Serial.print(pkt.batteryPct);
+    Serial.print("% dG=");
+    Serial.println(pkt.deltaG, 3);
 
-    bool flash = true; // always flash on new alert
-    g_lastRodShown = rod;
+    g_lastRodShown  = rod;
     g_lastEventType = pkt.eventType;
 
-    showAlertScreen(rod, pkt.eventType, flash);
+    showAlertScreen(rod, pkt.eventType);
+    startMotorPattern(pkt.eventType);
+
     lastAlertMs = now;
     lastProgressDrawMs = 0;
   }
 
-  // While alert is active: update progress bar occasionally
+  // While alert is active
   if (lastAlertMs != 0) {
     uint32_t elapsed = now - lastAlertMs;
 
-    if (now - lastProgressDrawMs >= PROGRESS_REFRESH_MS) {
+    if (g_oledState != OLED_OFF && (now - lastProgressDrawMs >= PROGRESS_REFRESH_MS)) {
       lastProgressDrawMs = now;
-
-      // draw only progress region in buffer, then flush
       drawAlertProgress(elapsed);
       display.display();
     }
 
-    // After hold timeout -> back to idle
     if (elapsed > ALERT_HOLD_MS) {
-      showIdle();
       lastAlertMs = 0;
       lastProgressDrawMs = 0;
+      showIdle(true);
     }
   }
 
   maybeDimOrOff();
+  handleStatusLed(now);
+  handleMotor(now);
+
   delay(10);
 }
