@@ -1,189 +1,277 @@
-# 🎣 Fishing Bite Sensor – ESP-NOW HUB (Beeper)
+# 🎣 Fishing Bite Sensor – ESP-NOW HUB
 
-Central receiver module (Beeper) for wireless fishing rod sensors using ESP-NOW on **Seeed Studio XIAO ESP32-S3**.
+Central receiver module for wireless fishing rod sensors using **ESP-NOW** on **Seeed Studio XIAO ESP32-S3**.
 
 ---
 
 ## 📌 Overview
 
-The **ESP-NOW Hub** is the central unit of a multi-rod wireless bite detection system.  
-Each fishing rod has an ESP32-based vibration sensor that sends an instant alert using **ESP-NOW** when motion is detected or when the battery is low.
+The **ESP-NOW Hub** is the central unit of a multi-rod wireless bite detection system.
+Each fishing rod has its own ESP32-based sensor with an accelerometer / vibration detection logic. When a bite is detected, the rod sends an instant packet using **ESP-NOW**.
 
-The Hub receives these packets and displays:
+The Hub receives these packets and provides immediate local indication using:
 
-- The **Rod ID** in large text  
-- The **Hub's own MAC address**  
-- The **Hub battery level** using an MP3-style 5-bar icon  
-- **Alert type**:
-  - Short vibration
-  - Continuous vibration
-  - Low-battery warning from the rod
+- **OLED display**
+- **Green status LED**
+- **Vibration motor**
 
-The entire system is designed to operate from battery power with **high efficiency**, **low latency**, and **zero Wi-Fi infrastructure**.
+The Hub is designed for:
+
+- **battery-powered outdoor use**
+- **low latency**
+- **low power consumption**
+- **operation without Wi-Fi router or internet**
 
 ---
 
-## ✨ Features
+## ✨ Main Functionality
 
 ### 🧲 ESP-NOW Communication
 
-- Direct **point-to-point** wireless communication (no router/AP required)  
-- Ultra-low latency (typically 0–10 ms)  
-- Supports **multiple rod sensors** sending to a single Hub  
-- Simple fixed packet format for easy decoding and expansion
+- Direct wireless communication with rod sensors
+- No router or access point required
+- Very low latency
+- Supports multiple rod sensors sending to one Hub
+- Receives alerts even when the OLED display is off
 
 ---
 
-### 📟 OLED Display (SSD1306 128×64)
+### 📟 OLED Display
 
-Two main display states:
+The Hub uses a **128×64 I2C OLED** display.
+In the current firmware the display is intended for **SH1106** modules and supports auto-detection of common I2C addresses.
 
-#### 🔔 Alert Mode
+#### Alert Screen
+When a packet is received, the Hub shows:
 
-Triggered when a bite/alert packet is received:
+- **Rod name / rod ID** in large centered text
+- **Event label** in the header
+- **Hub battery icon**
+- **Progress bar** showing the alert display timeout
 
-- **Rod name (Rod ID)** is shown in the center in large font  
-- **Alert stays on screen for a few seconds**  
-- Hub MAC is shown in the top-left corner  
-- Hub battery icon shown in the top-right corner  
-- Optional differentiation by event type:
-  - Short vibration
-  - Continuous vibration
-  - Low-battery from rod (can be displayed as a special message or icon)
+#### Idle Screen
+When there is no active alert, the Hub shows:
 
-#### 💤 Idle Mode
+- `WAITING...`
+- Hub MAC address
+- Battery icon
 
-When no recent alerts:
+#### OLED Power Saving
+To save battery:
 
-- Shows `READY (ESP-NOW Hub)` or similar idle text  
-- Shows Hub MAC address  
-- Battery indicator updated periodically  
-- Display is dimmed or turned off after a timeout to save power
+- after **1 minute** of inactivity → display goes to **dim mode**
+- after **2 minutes** of inactivity → display turns **OFF**
+- on any new ESP-NOW alert → display wakes immediately
+
+> ESP-NOW remains active even when the display is off.
+
+---
+
+### 🟢 Green Status LED
+
+A green LED is used as a simple “alive” indicator.
+
+Behavior:
+
+- **Normal mode / dim mode** → LED is **solid ON**
+- **Display OFF mode** → LED **blinks once every 10 seconds**
+
+This allows the user to confirm that the Hub is still powered and operating even when the OLED is off.
+
+---
+
+### 📳 Vibration Motor Alert
+
+A miniature vibration motor is connected to the Hub and activated when an alert is received.
+
+Motor behavior depends on the event type:
+
+- **eventType = 1** → short vibration pulse
+- **eventType = 2** → longer vibration pulse
+- **eventType = 3** → double short pulse for low-battery warning from a rod
+
+The motor is driven through a **MOSFET transistor stage** and must **not** be connected directly to the ESP32 GPIO.
 
 ---
 
 ### 🔋 Battery Monitoring (Hub)
 
-- Hub is powered from a single-cell **Li-Ion 3.7V** battery  
-- Voltage is measured via ADC and a **resistive divider**  
-- Voltage is converted to approximate **battery percentage**  
-- A **5-segment MP3-style icon** shows charge level:
-  - 0–1 bars: low battery  
-  - 2–3 bars: medium  
-  - 4–5 bars: high  
-- Voltage-to-% mapping is adjustable in firmware for calibration to your specific cell and load
+The Hub measures its own battery voltage using an ADC input and resistor divider.
+
+Current hardware concept:
+
+- single-cell **Li-Ion / 18650** battery
+- resistor divider: **100k / 100k**
+- ADC filtering capacitor recommended near the XIAO ADC input
+
+Battery information is shown on-screen using a **5-segment battery icon**.
 
 ---
 
-### ⚡ Power Saving
+## 📡 Packet Format
 
-The Hub is optimized for long battery life:
-
-- CPU frequency lowered to **80 MHz**  
-- Wi-Fi **Modem-Sleep / Light-Sleep** enabled where possible  
-- OLED backlight / panel is:
-  - **Dimmed** after ~30 seconds of inactivity  
-  - **Turned off** after ~60 seconds of inactivity  
-- Display wakes up immediately when:
-  - New ESP-NOW packet (bite or low-battery) arrives  
-  - A button is pressed (if you add one later)
-
----
-
-## 📡 Bite Packet Format
-
-Rod sensors send the following packet over ESP-NOW:
+The Hub expects rod sensors to send the following structure:
 
 ```cpp
 struct BitePacket {
-  char    rodName[16];   // Rod identifier / sensor name
-  uint8_t eventType;     // 1 = short vibration
-                         // 2 = continuous vibration
-                         // 3 = low-battery warning (from rod)
-  uint8_t batteryPct;    // Rod battery percentage 0–100%
-  float   deltaG;        // Vibration intensity (Δg)
+  char    rodName[16];
+  uint8_t eventType;     // 1 = BITE, 2 = RUN, 3 = LOW BAT
+  uint8_t batteryPct;    // rod battery percentage
+  float   deltaG;        // vibration intensity
 };
 ```
 
-----
+### Field Description
 
-## 🔎 Field Details
+#### `rodName`
+Human-readable rod or sensor name.
 
-### rodName[16]
-Human-readable name of the rod / sensor.
-Usually matches the AP SSID / sensor name configured on the rod device.
+#### `eventType`
+Defines the meaning of the alert:
 
-#### eventType
-Encodes the type of event the rod reports:
-- 1 – Short bite / first trigger
-- 2 – Continuous vibration / prolonged motion
-- 3 – Low battery on the rod device (no bite, just status)
-### The Hub can:
-Show different messages or icons based on eventType
-For example:
-- 1 – flash screen once
-- 2 – keep flashing or beep multiple times
-- 3 – show "LOW BAT" plus rod name
+- `1` = short bite / first trigger
+- `2` = continuous run / prolonged motion
+- `3` = low battery warning from rod sensor
 
-#### batteryPct
-Battery level of the rod sensor, already mapped to 0–100%.
-Can be used by the Hub to:
-- Show per-rod battery status
-- Decide when to display warnings or log maintenance
+#### `batteryPct`
+Battery level of the rod sensor.
 
-#### deltaG
-Last measured vibration intensity in Δg (difference from baseline gravity).
-Useful for debugging, tuning sensitivity, or showing how strong the bite was.
+#### `deltaG`
+Measured vibration level used for debugging and tuning.
+
+---
+
+## ⚙️ Alert Handling Logic
+
+When the Hub receives an ESP-NOW packet:
+
+1. Packet is decoded
+2. OLED wakes if needed
+3. Rod name and event type are shown on screen
+4. Vibration motor pattern is triggered
+5. Alert stays visible for a few seconds
+6. Hub returns to idle screen
+
+---
+
+## ⚡ Power Saving Strategy
+
+The Hub keeps **ESP-NOW active at all times**.
+It does **not** use deep sleep in normal operation, because deep sleep would stop ESP-NOW reception.
+
+Power saving is achieved by:
+
+- lowering CPU frequency
+- enabling Wi-Fi sleep where possible
+- dimming the OLED after inactivity
+- fully turning off the OLED after longer inactivity
+- using LED heartbeat indication instead of leaving the display on
+
+This allows the Hub to remain responsive while still reducing battery consumption.
 
 ---
 
 ## 🔧 Hardware Summary
 
-Hub MCU: Seeed Studio XIAO ESP32-S3
-Display: 0.96" SSD1306 OLED, 128×64, I²C
-Power: 3.7V Li-Ion cell (e.g., 18650 or flat LiPo)
-Battery sensing:
- - Voltage divider (e.g., 2×100k + 100nF to GND)
- - Connected to ADC-capable pin of XIAO ESP32-S3
-Optional beeper / LED:
- - Can be added to signal alerts with sound and/or light
- -Driven via transistor/MOSFET from a GPIO pin
+### Main Parts
+
+- **Seeed Studio XIAO ESP32-S3**
+- **SH1106 OLED display, 128×64, I2C**
+- **Single-cell Li-Ion / 18650 battery**
+- **Green status LED**
+- **Mini vibration motor (7 mm type)**
+- **AO3400A MOSFET drivers** for LED and motor
+
+### Recommended Supporting Components
+
+- flyback diode across motor
+- bulk capacitor near motor supply
+- ceramic capacitor near motor supply
+- resistor divider for battery ADC
+- ADC filter capacitor near XIAO ADC input
 
 ---
 
-## 🔄 System Architecture
+## 🧩 Driver Hardware Notes
 
-### 1.Rod Sensor (ESP32 + accelerometer)
+### Vibration Motor Driver
 
-     Measures vibration via IMU (e.g., LSM6DS3 / BMI160 / etc.)
-     Detects short and continuous bites based on Δg and time
-     Monitors its own battery
-     Sends BitePacket via ESP-NOW to the Hub’s MAC
+Recommended implementation:
 
-### 2.ESP-NOW Hub (this project)
-  - Listens for BitePacket on ESP-NOW
-  - On packet reception:
-     - Parses rodName, eventType, batteryPct, deltaG
-     - Updates OLED display accordingly
-     - Optionally drives a buzzer/LED
+- motor powered from battery rail
+- low-side MOSFET switching
+- flyback diode across motor
+- bulk + ceramic capacitor near motor
+
+### LED Driver
+
+- low-side MOSFET switching
+- current-limiting resistor for the LED
 
 ---
 
 ## 🧪 Testing & Debugging
 
-Use Serial Monitor (115200 baud) to:
- - Print received packets
- - Show parsed fields (rod name, event type, battery, Δg)
- - Verify that low-battery alerts (eventType = 3) are received correctly
-Use one rod sensor first to test range and reliability
-Add more rods once basic communication is stable
+Use the serial monitor to verify:
+
+- Hub MAC address
+- received rod name
+- event type
+- rod battery percentage
+- `deltaG` value
+
+Suggested test sequence:
+
+1. Power the Hub
+2. Confirm OLED shows idle screen
+3. Wait until OLED turns off and confirm green LED heartbeat
+4. Trigger a rod sensor
+5. Confirm OLED wakes instantly
+6. Confirm vibration motor activates
+7. Confirm correct rod name is shown
 
 ---
 
-## 📁 Project Structure (recommended)
+## 📁 Project Structure
 
+```text
 hub/
-  - src/main.cpp – ESP-NOW Hub firmware
-  -  platformio.ini – PlatformIO config for XIAO ESP32-S3
-  - README.md – This documentation
+  src/main.cpp        # ESP-NOW Hub firmware
+  platformio.ini      # PlatformIO configuration
+  README.md           # Project documentation
+```
 
+---
+
+## 🛠 Current Functional Summary
+
+The current ESP-HUB firmware supports:
+
+- ESP-NOW packet reception
+- OLED alert screen with rod name
+- idle screen with battery and MAC
+- battery monitoring
+- OLED dim mode after inactivity
+- OLED off mode after inactivity
+- green LED normal/alive indication
+- green LED heartbeat when display is off
+- vibration motor alert on incoming bite events
+- different motor patterns by event type
+
+---
+
+## 🚀 Planned / Optional Future Improvements
+
+- button-based wake or menu handling
+- per-rod alert history
+- configurable motor patterns
+- sound buzzer output
+- wireless settings interface
+- battery warning for the Hub itself
+
+---
+
+## 👤 Project
+
+Fishing Bite Sensor – ESP-NOW HUB
+Designed for portable fishing bite notification with local visual and vibration alerts.
