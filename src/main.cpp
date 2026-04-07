@@ -26,6 +26,7 @@
 #include <esp_now.h>
 #include <esp_idf_version.h>
 #include <esp_sleep.h>
+#include <esp_task_wdt.h>
 #if ESP_IDF_VERSION_MAJOR >= 5
   #include <esp_wifi_types.h>
 #endif
@@ -36,6 +37,7 @@
 #include <LittleFS.h>
 #include <GyverDBFile.h>
 #include <SettingsGyver.h>
+#include <EncButton.h>
 
 #if !defined(ARDUINO_XIAO_ESP32S3) && !defined(ARDUINO_XIAO_ESP32C6) && !defined(ARDUINO_XIAO_ESP32C3)
 #warning "This sketch is tuned for Seeed XIAO ESP32-S3 / ESP32-C6 / ESP32-C3. Check pin mappings if using another board."
@@ -65,7 +67,6 @@ const float   MS2_PER_G         = 9.80665f;
 
 const uint8_t  TRIGGER_SAMPLES    = 3;
 const uint16_t LONG_PRESS_MS      = 1000;
-const uint16_t DEBOUNCE_MS        = 30;
 const uint16_t SAMPLE_INTERVAL_MS = 10;
 
 // ARM warmup after ARM (prevents instant false alarms)
@@ -111,9 +112,8 @@ uint16_t warmupCnt = 0;
 float    warmupSumMag = 0.0f;
 bool     gravInited = false;
 
-// BUTTON (SW1) FSM – ARM/DISARM
-bool btnPrev = HIGH, btnIsDown = false, longFired = false;
-uint32_t btnLastChange = 0, btnDownAt = 0;
+// BUTTON (SW1) – ARM/DISARM
+Button btn(BUTTON);
 
 // POWER BUTTON (SW2 / BTN_IN) FSM – POWER OFF
 const bool PWRBTN_ACTIVE_LEVEL = LOW;
@@ -1032,15 +1032,9 @@ void update(sets::Updater& u){
 // ==============================
 // BUTTON HANDLER (SW1 – ARM/DISARM)
 // ==============================
-static void handleButton(uint32_t now){
-  int raw = digitalRead(BUTTON);
-  if (raw != btnPrev && (now - btnLastChange) >= DEBOUNCE_MS) {
-    btnPrev = raw; btnLastChange = now;
-    if (raw == LOW) { btnIsDown = true; btnDownAt = now; longFired = false; }
-    else btnIsDown = false;
-  }
-  if (btnIsDown && !longFired && (now - btnDownAt) >= LONG_PRESS_MS) {
-    longFired = true;
+static void handleButton(){
+  btn.tick();
+  if (btn.hold()) {
     if (armed) setArmed(false, false);
     else       setArmed(true,  false);
   }
@@ -1058,7 +1052,8 @@ void setup(){
   pinMode(LED_GREEN,OUTPUT);
   pinMode(LED_RED,OUTPUT);
   pinMode(BUZZER,OUTPUT);
-  pinMode(BUTTON,INPUT_PULLUP);
+  pinMode(BUTTON, INPUT_PULLUP);
+  btn.setHoldTimeout(LONG_PRESS_MS);
   pinMode(VBAT_PIN, INPUT);
 
   Serial.begin(115200);
@@ -1068,6 +1063,13 @@ void setup(){
 
 #ifdef ESP32
   setCpuFrequencyMhz(80);
+#if ESP_IDF_VERSION_MAJOR >= 5
+  { esp_task_wdt_config_t wc = {.timeout_ms = 30000, .idle_core_mask = 0, .trigger_panic = true};
+    esp_task_wdt_reconfigure(&wc); }
+#else
+  esp_task_wdt_init(30, true);
+#endif
+  esp_task_wdt_add(NULL);       // watch the main loop task
 #endif
 
   analogReadResolution(12);
@@ -1159,7 +1161,14 @@ void setup(){
   recalibrateBaseline();
   resetAutoDisarm();
 
-  setArmed(cfg_armedSw,false);
+  // On fresh power-on: always DISARMED.
+  // On watchdog / crash / SW reset: restore last saved state so sensor resumes its job.
+  {
+    esp_reset_reason_t reason = esp_reset_reason();
+    bool restore = (reason != ESP_RST_POWERON && reason != ESP_RST_DEEPSLEEP);
+    setArmed(restore ? cfg_armedSw : false, false);
+    if (restore) Serial.printf("Reset reason %d – restoring armed=%d\n", reason, cfg_armedSw);
+  }
   bootMs = millis();
 
   g_vbat_V   = readVbat();
@@ -1178,11 +1187,12 @@ void setup(){
 // LOOP
 // ==============================
 void loop(){
+  esp_task_wdt_reset();
   sett.tick();
   uint32_t now = millis();
 
   handlePowerButton();
-  handleButton(now);
+  handleButton();
   updateGreenLED();
 
   // AP window after ARM
