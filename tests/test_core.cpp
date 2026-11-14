@@ -1,6 +1,8 @@
 #include "SensorCore.h"
 #include "ImuRead.h"
 #include "CsvBuffer.h"
+#include "ConfigDatabase.h"
+#include "ImuSession.h"
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -13,8 +15,24 @@ void require(bool ok,const char* name){if(!ok)throw std::runtime_error(name);}
 uint32_t calibrate(SensorCore& c,uint32_t t=1000){c.update({0,0,1},t);require(c.beginCalibration(t),"calibration starts after valid sample");for(int i=0;i<201;++i){t+=10;c.update({0,0,1},t);}require(c.calibrated(),"quiet calibration completes");return t;}
 uint32_t arm(SensorCore& c){Config cfg;c.configure(cfg);uint32_t t=calibrate(c);require(c.setArmed(true,t),"arm accepted");for(int i=0;i<150;++i){t+=10;c.update({0,0,1},t);}require(c.state()==State::Armed,"settled to armed");return t;}
 struct FakeIo {bool statusOk=true,burstOk=true;uint8_t status=1;int bursts=0;bool read(uint8_t reg,uint8_t* out,size_t n){if(reg==0x1e){*out=status;return statusOk;}++bursts;if(!burstOk)return false;for(size_t i=0;i<n;++i)out[i]=0;out[4]=0x09;out[5]=0x40;return true;}};
+struct FakeStorage {std::string bytes="corrupt existing bytes";bool exists=true,readable=false;int writes=0;};
+// Only file IO and library scheduling are faked; the production guard is under test.
+struct FakeFileDb {
+    FakeStorage* fs;bool _update=false;uint32_t now=0,dirtyAt=0;
+    explicit FakeFileDb(FakeStorage* f):fs(f){}
+    ~FakeFileDb(){update();}
+    bool begin(){if(!fs->exists){fs->exists=true;fs->bytes="";return true;}return fs->readable;}
+    void set(){_update=true;}
+    bool update(){if(!_update)return false;_update=false;++fs->writes;fs->bytes="saved settings";return true;}
+    virtual bool tick(){if(_update&&!dirtyAt)dirtyAt=now;if(dirtyAt&&now-dirtyAt>=10000)return update();return false;}
+};
+struct SessionIo : FakeIo {int begins=0;bool begin(){++begins;return true;}ReadStatus sample(Vec3& a){return readAccel(*this,a);}};
 int main(){
 std::vector<std::pair<const char*,std::function<void()>>> tests={
+{"storage-load-failure-preserves-bytes",[]{FakeStorage fs;auto original=fs.bytes;{ConfigDatabase<FakeFileDb> db(&fs);require(!db.begin(),"existing corrupt DB fails load");db.set();db.now=1;FakeFileDb* settings=&db;settings->tick();db.set();require(!db.update(),"RAM-only explicit save must be blocked");db.set();db.now=12002;settings->tick();require(fs.bytes==original&&fs.writes==0,"UI/calibration and delayed Settings tick preserve file");db.set();}require(fs.bytes==original&&fs.writes==0,"base destructor cannot save RAM defaults");}},
+{"first-frame-timeout-retry-recovery",[]{for(uint32_t start:{100u,UINT32_MAX-80}){SensorCore c;SessionIo io;io.status=0;ImuSession session;session.begin(io,c,start);for(uint32_t dt=10;dt<200;dt+=10){Vec3 a;uint8_t event;session.supervise(io,c,start+dt);if(session.due(start+dt))session.read(io,c,start+dt,a,event);if(dt<150)require(io.begins==1&&session.online(),"normal DRDY wait must not reinit");}require(!session.online()&&io.begins==1&&c.state()==State::Fault,"no first frame has bounded deadline");session.supervise(io,c,start+2149);require(io.begins==1,"retry remains sparse");session.supervise(io,c,start+2150);require(io.begins==2&&session.online(),"retry successful begin after cooldown");io.status=1;Vec3 a;uint8_t event;session.read(io,c,start+2160,a,event);require(c.state()==State::Calibrating&&!c.desiredArmed(),"recovery must calibrate without arming");for(uint32_t dt=2170;dt<=4170;dt+=10){session.supervise(io,c,start+dt);if(session.due(start+dt))session.read(io,c,start+dt,a,event);}require(c.calibrated()&&c.state()==State::Disarmed&&!c.desiredArmed(),"recovery completes disarmed");}}},
+{"storage-failed-load-auto-write",[]{FakeStorage fs;auto original=fs.bytes;{ConfigDatabase<FakeFileDb> db(&fs);require(!db.begin(),"load fails");FakeFileDb* settings=&db;db.set();db.now=1;settings->tick();db.set();db.now=12002;settings->tick();require(fs.bytes==original&&fs.writes==0,"library auto-write cannot replace corrupt bytes");}require(fs.bytes==original,"destruction preserves corrupt bytes");}},
+{"storage-new-db-still-saves",[]{FakeStorage fs;fs.exists=false;ConfigDatabase<FakeFileDb> db(&fs);require(db.begin()&&fs.exists,"absent database is created");db.set();require(db.update()&&fs.writes==1,"new DB explicit save stays enabled");db.set();db.now=1;FakeFileDb* settings=&db;settings->tick();db.now=12002;settings->tick();require(fs.writes==2,"new DB Settings auto save stays enabled");}},
 {"weak-axis",[]{Features f;for(uint32_t t=0;t<2000;t+=10)f.update({0,0,1},t);auto s=f.update({.1f,0,1},2000);require(s.dynamic>.09f,"weak transverse impulse preserves direction");require(s.legacy<.006f,"legacy magnitude blind spot");}},
 {"first-armed-impulse",[]{SensorCore c;uint32_t t=arm(c);uint8_t event=0;for(int i=0;i<5;++i){t+=10;event|=c.update({.1f,0,1},t);}require(event==1,"first impulse after settle must not become gravity baseline");}},
 {"dynamic-versus-legacy",[]{SensorCore d,l;auto t=arm(d);arm(l);Config cfg=l.config();cfg.legacyMode=true;l.configure(cfg);int de=0,le=0;for(int i=0;i<10;++i){t+=10;de+=d.update({.1f,0,1},t)==1;le+=l.update({.1f,0,1},t)==1;}require(de==1&&le==0,"same transverse input dynamic triggers once, legacy misses");}},

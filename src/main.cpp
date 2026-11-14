@@ -15,22 +15,25 @@
 #include "ImuDriver.h"
 #include "SensorCore.h"
 #include "CsvBuffer.h"
+#include "ConfigDatabase.h"
+#include "ImuSession.h"
 
 // Keep original key hashes and 22-byte wire contract. New semantics use new keys.
 DB_KEYS(kk,name,deltaG,shortPulse,pulsePeriod,contThresh,armedSw,langIdx,testAlarm,apPass,saveRB,buzVol,ledRedLvl,ledGreenLvl,espNowEn,hubMac);
 struct __attribute__((packed)) BitePacket {char rodName[16];uint8_t eventType,batteryPct;float deltaG;};
 static_assert(sizeof(BitePacket)==22,"Hub wire compatibility");
-GyverDBFile db(&LittleFS,"/config.db");
+bite::ConfigDatabase<GyverDBFile> db(&LittleFS,"/config.db");
 SettingsGyver sett("Fishing Bite Sensor - bench",&db);
 Button button(board::button);
 ImuDriver imu;
 bite::SensorCore sensor;
+bite::ImuSession imuSession;
 bite::Config draft;
 bite::Pulse alarmPulse,beep;
 bite::CsvBuffer<2048> csvBuffer;
 bite::Calibration previousCalibration=bite::Calibration::None;
 bite::StateClock apClock,disarmedClock;
-bool storageOK=false,pwmOK=false,imuOnline=false,initialCal=true;
+bool storageOK=false,pwmOK=false;
 bool apActive=true,radioReady=false,radioEn=false,csv=false,armUi=false;
 bool saveConfig=false,calRequest=false,testRequest=false,networkRequest=false;
 bool shutdownPending=false,sleepAttempted=false;
@@ -40,7 +43,7 @@ String sensorName="BiteSensor",apPassword="",hubAddress="";
 String draftName,draftPass,draftMac,notice="",sleepNotice="",radioNotice="";
 bool draftRadio=false;
 uint8_t peerMac[6]={0};
-uint32_t lastRead=0,lastRetry=0,lastBattery=0,lastRate=0,rateSamples=0;
+uint32_t lastBattery=0,lastRate=0,rateSamples=0;
 uint32_t pulseCount=0,readErrors=0,noNew=0,csvDrops=0,sendErrors=0,saveNonce=0;
 uint32_t rebootAt=0,shutdownAt=0;
 float sampleRate=0,vbat=0;int batteryPct=0;
@@ -261,8 +264,7 @@ void setup(){
     storageOK=mountStorage();if(storageOK)storageOK=db.begin();
     if(!storageOK)notice="Storage error; RAM settings only (not formatting existing data)";
     loadConfig();Wire.begin(board::sda,board::scl);Wire.setClock(400000);Wire.setTimeOut(20);
-    imuOnline=imu.begin();if(!imuOnline)sensor.fault(millis());
-    uint32_t now=millis();lastRetry=now;enterConfig(now);reconcileRadio();disarmedClock.enter(now);
+    uint32_t now=millis();imuSession.begin(imu,sensor,now);now=millis();enterConfig(now);reconcileRadio();disarmedClock.enter(now);
     sleepNotice=board::wakeAllowed()?"Wake pin accepted; power latch still requires hardware test":"D6 cannot deep-wake this board: automatic deep sleep disabled";
     sett.begin();sett.onBuild(build);sett.onUpdate(update);
     updateBattery();lastBattery=lastRate=now;powerStable=powerPrev=digitalRead(board::powerButton);powerChanged=now;
@@ -285,20 +287,17 @@ void loop(){
     if(rebootAt&&bite::elapsed(now,rebootAt)>=700)ESP.restart();
     if(calRequest){calRequest=false;stopOutputs();if(!sensor.beginCalibration(now))notice="Calibration unavailable: IMU fault";}
     if(testRequest){testRequest=false;if(sensor.state()==bite::State::Disarmed||sensor.state()==bite::State::Armed){alarmPulse.start(now,pulseMs);++pulseCount;}else notice=tr("Test rejected: sensor not ready","Тест отклонён: датчик не готов");}
-    auto oldState=sensor.state();sensor.tick(now);
-    if(imuOnline&&sensor.state()==bite::State::Fault&&sensor.telemetry().samples>0){imuOnline=false;lastRetry=now;stopOutputs();}
-    if(!imuOnline&&bite::elapsed(now,lastRetry)>=2000){lastRetry=now;imuOnline=imu.begin();initialCal=imuOnline;now=millis();}
-    if(imuOnline&&bite::elapsed(now,lastRead)>=9){
-        lastRead=now;bite::Vec3 sample;auto result=imu.sample(sample);
+    auto oldState=sensor.state();imuSession.supervise(imu,sensor,now);
+    if(!imuSession.online())stopOutputs();
+    if(imuSession.due(now)){
+        bite::Vec3 sample;uint8_t event=0;auto result=imuSession.read(imu,sensor,now,sample,event);
         if(result==bite::ReadStatus::Fresh){
-            uint8_t event=sensor.update(sample,now);
-            if(initialCal){initialCal=false;sensor.beginCalibration(now);event=0;}
             if(event&&sensor.state()==bite::State::Armed){alarmPulse.start(now,pulseMs);++pulseCount;sendPacket(event);}
             if(csv){const auto& t=sensor.telemetry();char line[220];
                 int n=snprintf(line,sizeof(line),"%lu,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%s,%u,%u\n",(unsigned long)now,sample.x,sample.y,sample.z,t.signal.dynamic,t.signal.legacy,t.noiseG,t.effectiveG,bite::stateName(sensor.state()),unsigned(event),unsigned(mode));
                 if(n<=0||n>=int(sizeof(line))||!csvBuffer.append(line,size_t(n)))++csvDrops;
             }
-        }else if(result==bite::ReadStatus::TransportError){++readErrors;imuOnline=false;lastRetry=now;sensor.fault(now);stopOutputs();}
+        }else if(result==bite::ReadStatus::TransportError){++readErrors;stopOutputs();}
         else ++noNew;
     }
     auto state=sensor.state();if(state!=oldState){
