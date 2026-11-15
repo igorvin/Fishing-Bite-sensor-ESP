@@ -43,3 +43,15 @@ Clock/time injection для переходов/таймеров и rollover; rep
 Внешние контракты: timestamp uint32ms с wrap-safe elapsed; accel XYZ в g; optional data freshness/error/valid status; отдельные output events и display telemetry. UART CSV documented header и bounded rate. Host-код не включает Arduino/WiFi headers; драйвер/loop используют то же tested core. Нельзя заменять integrated logic отдельным тестовым двойником.
 
 Безопасное sleep-поведение по текущим pins: invalidwake → видимая причина и остаёмся доступными. Не назначать другой GPIO без схемы. Новое шумовое schema/key не перезаписывает старый смысл deltaG. Первичная cal перед READY и явная ручная cal имеют проверяемые outcomes. Подавление автоматически возобновляет только желаемую пользователем охрану, а не ручной Disarmed/Fault.
+
+## Построено в T01
+
+- `bite::SensorCore`: update(Vec3,uint32_t), tick, configure, setArmed, beginCalibration, fault, restoreNoise; Telemetry/State/Calibration — публичное переносимое ядро, используемое firmware и replay.
+- `bite::readAccel(Transport&,Vec3&)`: Fresh/NoNewData/TransportError, actual checked Wire read через ImuDriver.
+- `CsvBuffer`, `Pulse`, `StateClock`: ограниченный неблокирующий CSV, обслуживание импульсов/времени.
+- Packed BitePacket22bytes/eventType1–3 сохранён. Config нового детектора/шума отделён от legacy deltaG; USB CDC вместо конфликтующего UART/D6.
+- Проверено оркестратором: host25/0, same-core replay fixture701sample; C3/S3 repeat SUCCESS, C6 SUCCESS у исполнителя. Hardware/field отсутствуют.
+
+## Построено в F1
+
+`bite::ConfigDatabase<FileDatabase>::begin/update/tick` закрывает auto/manual/destructor запись при ошибке чтения существующей БД; `bite::ImuSession::begin/supervise/due/read/online` задаёт150ms first-frame deadline и2000ms retry. Host29/0; отдельная интеграция actual GyverDBFile0failed (для неё сначала C3 PIO fetch/build); C3/S3/C6 SUCCESS. Поведение детектора/протокол/P3 без изменений.

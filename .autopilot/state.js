@@ -2,7 +2,7 @@ window.STATE =
 {
   "version": 2,
   "slug": "functional-audit",
-  "dir": "2026-11-14-functional-audit--wip",
+  "dir": "2026-11-14-functional-audit",
   "title": "Полный аудит и план переработки датчика поклёвки",
   "mode": "semi",
   "depth": "normal",
@@ -11,10 +11,10 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "memoryOwner": "user",
   "skillDir": "/Users/macbook-air/.agents/skills/autopilot",
-  "baseCommit": "00e8e81",
+  "baseCommit": "3b08e96",
   "startedAt": "2026-11-14T22:51:11+02:00",
-  "updatedAt": "2026-11-14T23:32:29+02:00",
-  "finishedAt": null,
+  "updatedAt": "2026-11-15T08:06:53+02:00",
+  "finishedAt": "2026-11-15T08:06:53+02:00",
   "stages": [
     {
       "id": "preflight",
@@ -48,22 +48,27 @@ window.STATE =
     },
     {
       "id": "build",
-      "status": "active",
-      "startedAt": "2026-11-14T23:32:29+02:00"
+      "status": "done",
+      "startedAt": "2026-11-14T23:32:29+02:00",
+      "finishedAt": "2026-11-15T00:00:36+02:00"
     },
     {
       "id": "review",
-      "status": "pending"
+      "status": "done",
+      "startedAt": "2026-11-15T00:00:36+02:00",
+      "finishedAt": "2026-11-15T07:55:49+02:00"
     },
     {
       "id": "final",
-      "status": "pending"
+      "status": "done",
+      "startedAt": "2026-11-15T07:55:49+02:00",
+      "finishedAt": "2026-11-15T08:06:53+02:00"
     }
   ],
   "requirements": {
     "total": 18,
-    "done": 0,
-    "inTicket": 18,
+    "done": 18,
+    "inTicket": 0,
     "inSpec": 0,
     "placeholder": 0,
     "deferred": 0,
@@ -107,13 +112,54 @@ window.STATE =
       ],
       "review": "нет",
       "model": "сильная",
-      "status": "in-progress",
+      "status": "done",
+      "startedAt": "2026-11-14T23:32:29+02:00",
+      "finishedAt": "2026-11-15T00:00:36+02:00",
       "retries": 0,
       "repairs": 0,
-      "startedAt": "2026-11-14T23:32:29+02:00"
+      "tests": {
+        "passed": 25,
+        "failed": 0
+      },
+      "commit": "5611dfd"
+    },
+    {
+      "id": "F1",
+      "title": "Сохранность БД при ошибке и ограниченное ожидание первого кадра",
+      "requirements": [
+        "R02",
+        "R03",
+        "G05",
+        "G09",
+        "G10",
+        "G12"
+      ],
+      "blockedBy": [],
+      "wave": 2,
+      "zone": [
+        "src/main.cpp",
+        "include/",
+        "tests/",
+        "docs/bench-testing.md"
+      ],
+      "review": "да — ремонт ветки",
+      "model": "сильная",
+      "status": "done",
+      "retries": 0,
+      "repairs": 0,
+      "startedAt": "2026-11-15T00:05:03+02:00",
+      "finishedAt": "2026-11-15T07:55:49+02:00",
+      "tests": {
+        "passed": 29,
+        "failed": 0
+      },
+      "commit": "1b8c6b6"
     }
   ],
-  "tests": null,
+  "tests": {
+    "passed": 29,
+    "failed": 0
+  },
   "debt": {
     "placeholders": [],
     "assumptions": [],
@@ -127,7 +173,11 @@ window.STATE =
     "items": []
   },
   "concerns": [],
-  "blind": null,
+  "blind": {
+    "checked": 18,
+    "matched": 18,
+    "mismatches": []
+  },
   "beats": [
     "2026-11-14T22:51:11+02:00",
     "2026-11-14T22:54:02+02:00",
@@ -137,9 +187,16 @@ window.STATE =
     "2026-11-14T23:08:34+02:00",
     "2026-11-14T23:28:18+02:00",
     "2026-11-14T23:31:08+02:00",
-    "2026-11-14T23:32:29+02:00"
+    "2026-11-14T23:32:29+02:00",
+    "2026-11-14T23:32:57+02:00",
+    "2026-11-15T00:00:36+02:00",
+    "2026-11-15T00:05:03+02:00",
+    "2026-11-15T00:12:50+02:00",
+    "2026-11-15T07:55:49+02:00",
+    "2026-11-15T08:05:31+02:00",
+    "2026-11-15T08:06:53+02:00"
   ],
-  "rev": 30,
+  "rev": 45,
   "waiting": null,
   "waits": [
     {
@@ -320,98 +377,206 @@ window.STATE =
         "01"
       ],
       "act": "start"
+    },
+    {
+      "t": "2026-11-15T00:00:36+02:00",
+      "k": "ticket",
+      "ids": [
+        "01"
+      ],
+      "act": "done",
+      "tests": {
+        "passed": 25,
+        "failed": 0
+      }
+    },
+    {
+      "t": "2026-11-15T00:00:36+02:00",
+      "k": "stage",
+      "id": "review",
+      "act": "start"
+    },
+    {
+      "t": "2026-11-15T00:05:03+02:00",
+      "k": "tickets",
+      "n": 2
+    },
+    {
+      "t": "2026-11-15T00:05:03+02:00",
+      "k": "gate",
+      "g": "G3",
+      "ok": true,
+      "problems": 0
+    },
+    {
+      "t": "2026-11-15T00:05:03+02:00",
+      "k": "add",
+      "key": "report",
+      "n": 2
+    },
+    {
+      "t": "2026-11-15T00:05:03+02:00",
+      "k": "ticket",
+      "ids": [
+        "F1"
+      ],
+      "act": "start"
+    },
+    {
+      "t": "2026-11-15T00:12:50+02:00",
+      "k": "ticket",
+      "ids": [
+        "F1"
+      ],
+      "act": "done",
+      "tests": {
+        "passed": 29,
+        "failed": 0
+      }
+    },
+    {
+      "t": "2026-11-15T00:12:50+02:00",
+      "k": "ticket",
+      "ids": [
+        "F1"
+      ],
+      "act": "review"
+    },
+    {
+      "t": "2026-11-15T07:55:49+02:00",
+      "k": "ticket",
+      "ids": [
+        "F1"
+      ],
+      "act": "done",
+      "tests": {
+        "passed": 29,
+        "failed": 0
+      }
+    },
+    {
+      "t": "2026-11-15T07:55:49+02:00",
+      "k": "stage",
+      "id": "final",
+      "act": "start"
+    },
+    {
+      "t": "2026-11-15T08:05:31+02:00",
+      "k": "gate",
+      "g": "G4",
+      "ok": true,
+      "checked": 18,
+      "matched": 18
+    },
+    {
+      "t": "2026-11-15T08:05:31+02:00",
+      "k": "tests",
+      "passed": 29,
+      "failed": 0
+    },
+    {
+      "t": "2026-11-15T08:05:31+02:00",
+      "k": "add",
+      "key": "report",
+      "n": 2
+    },
+    {
+      "t": "2026-11-15T08:06:53+02:00",
+      "k": "finish",
+      "result": "Первый стендовый датчик: XYZ/шум/чувствительность, suppression/recovery, 29 тестов, clean C3/S3 прошивки; аппаратная проверка впереди",
+      "problems": 0
     }
   ],
   "reqList": [
     {
       "id": "R01",
       "text": "«Составь полный план работы»",
-      "status": "in-ticket"
+      "status": "done"
     },
     {
       "id": "R02",
       "text": "«переработки кода»",
-      "status": "in-ticket"
+      "status": "done"
     },
     {
       "id": "R03",
       "text": "«и всех найденных проблем»",
-      "status": "in-ticket"
+      "status": "done"
     },
     {
       "id": "R04",
       "text": "«Скажи мне, если есть что-то непонятно, задай вопросы»",
-      "status": "in-ticket"
+      "status": "done"
     },
     {
       "id": "R05",
       "text": "«сделал ревью по полному функционалу»",
-      "status": "in-ticket"
+      "status": "done"
     },
     {
       "id": "R06",
       "text": "«сказал, насколько этот датчик эффективен или нет»",
-      "status": "in-ticket"
+      "status": "done"
     },
     {
       "id": "G01",
       "text": "«Seeed XIAO ESP32-S3»",
-      "status": "in-ticket"
+      "status": "done"
     },
     {
       "id": "G02",
       "text": "«Аккумулятор будет довольно маленький»",
-      "status": "in-ticket"
+      "status": "done"
     },
     {
       "id": "G03",
       "text": "«Где-то посередине»",
-      "status": "in-ticket"
+      "status": "done"
     },
     {
       "id": "G04",
       "text": "«При небольших толчках невозможно было хорошо откалибровать акселерометр»",
-      "status": "in-ticket"
+      "status": "done"
     },
     {
       "id": "G05",
       "text": "«конфигурировался в настройках через веб-интерфейс»",
-      "status": "in-ticket"
+      "status": "done"
     },
     {
       "id": "G06",
       "text": "«Временно подавлять и возвращаться после стабилизации»",
-      "status": "in-ticket"
+      "status": "done"
     },
     {
       "id": "G07",
       "text": "«сделал ревью на libraries, которые я использую»",
-      "status": "in-ticket"
+      "status": "done"
     },
     {
       "id": "G08",
       "text": "«может что-либо не стоит использовать или переделать на какие-то более свежие libraries, которые дадут более лучший результат»",
-      "status": "in-ticket"
+      "status": "done"
     },
     {
       "id": "G09",
       "text": "«IMU: LSM6DS3»",
-      "status": "in-ticket"
+      "status": "done"
     },
     {
       "id": "G10",
       "text": "«Это тот стенд, на котором ты наблюдал плохую чувствительность? YES»",
-      "status": "in-ticket"
+      "status": "done"
     },
     {
       "id": "G11",
       "text": "«Display: You can take from the code»",
-      "status": "in-ticket"
+      "status": "done"
     },
     {
       "id": "G12",
       "text": "«Lets start»",
-      "status": "in-ticket"
+      "status": "done"
     }
   ],
   "gates": {
@@ -430,17 +595,28 @@ window.STATE =
     },
     "G3": {
       "ok": true,
-      "at": "2026-11-14T23:32:29+02:00",
+      "at": "2026-11-15T00:05:03+02:00",
       "problems": 0
+    },
+    "G4": {
+      "ok": true,
+      "at": "2026-11-15T08:05:31+02:00",
+      "checked": 18,
+      "matched": 18
     }
   },
-  "result": null,
+  "result": "Первый стендовый датчик: XYZ/шум/чувствительность, suppression/recovery, 29 тестов, clean C3/S3 прошивки; аппаратная проверка впереди",
   "report": [
     "Аудит и план готовы; прошивки не изменены, четыре таска — будущая работа",
     "Основной датчик XIAO ESP32-S3; временное подавление с возвратом подтверждено пользователем",
     "Для аппаратных решений ещё нужны IMU, хаб, схема питания/кнопок и параметры батареи",
     "Эффективность на воде, автономность и дальность ещё не измерены",
     "Изолированные сборки: sensor C3/C6/S3 и hub C3 успешны; hub S3 missing GFX, hub C6 invalid package identifier",
-    "По библиотекам: основные версии актуальны; оставить и закрепить, добавить проверяемое чтение IMU; массовая замена не обоснована"
-  ]
+    "По библиотекам: основные версии актуальны; оставить и закрепить, добавить проверяемое чтение IMU; массовая замена не обоснована",
+    "P3: переключатель веб-охраны может отставать от кнопки/Fault до обновления страницы; фактическое состояние показывается в State",
+    "Аппаратные и полевые проверки не выполнялись; invalid D6 wake блокирует сон, схема требует проверки",
+    "Текущий итог supersedes исторический аудит: sensor реализован, source1b8c6b6, cleanclone18/18software, F1закрыт",
+    "Физическая эффективность и автономность не подтверждены; это ограничение доказательств, не softwaremismatch"
+  ],
+  "blindRounds": 1
 }
