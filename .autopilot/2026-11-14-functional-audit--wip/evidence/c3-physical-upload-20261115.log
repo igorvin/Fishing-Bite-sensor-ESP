@@ -1,0 +1,323 @@
+Processing xiao_esp32c3 (board: seeed_xiao_esp32c3; platform: platformio/espressif32@8.0.0; framework: arduino)
+--------------------------------------------------------------------------------
+Verbose mode can be enabled via `-v, --verbose` option
+CONFIGURATION: https://docs.platformio.org/page/boards/espressif32/seeed_xiao_esp32c3.html
+PLATFORM: Espressif 32 (8.0.0) > Seeed Studio XIAO ESP32C3
+HARDWARE: ESP32C3 160MHz, 320KB RAM, 4MB Flash
+DEBUG: Current (cmsis-dap) External (cmsis-dap, esp-bridge, esp-builtin, esp-prog, iot-bus-jtag, jlink, minimodule, olimex-arm-usb-ocd, olimex-arm-usb-ocd-h, olimex-arm-usb-tiny-h, olimex-jtag-tiny, tumpa)
+PACKAGES: 
+ - framework-arduinoespressif32 @ 4.30312.261113 (3.3.12) 
+ - framework-arduinoespressif32-esp32c3-libs @ 3.3.12 
+ - tool-esptool @ 2.50400.0 (5.4.0) 
+ - tool-mkfatfs @ 2.0.1 
+ - tool-mklittlefs @ 1.203.210628 (2.3) 
+ - tool-mkspiffs @ 2.230.0 (2.30) 
+ - tool-riscv32-esp-elf-gdb @ 12.1.0+20221002 
+ - tool-xtensa-esp-elf-gdb @ 12.1.0+20221002 
+ - toolchain-riscv32-esp @ 14.2.0+20260121 
+ - toolchain-xtensa-esp-elf @ 14.2.0+20260121
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 59 compatible libraries
+Scanning dependencies...
+Dependency Graph
+|-- GyverDB @ 1.4.4
+|-- Settings @ 1.4.3
+|-- EncButton @ 3.7.6
+|-- Adafruit LSM6DS @ 4.7.4
+|-- Adafruit Unified Sensor @ 1.1.15
+|-- Adafruit BusIO @ 1.17.4
+|-- LittleFS @ 3.3.12
+|-- WiFi @ 3.3.12
+|-- Wire @ 3.3.12
+Building in release mode
+Compiling .pio/build/xiao_esp32c3/src/main.cpp.o
+Building .pio/build/xiao_esp32c3/bootloader.bin
+Compiling .pio/build/xiao_esp32c3/lib15e/StringUtils/utils/hash.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib15e/StringUtils/utils/list.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib5ed/Hash/PBKDF2_HMACBuilder.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib5ed/Hash/SHA1Builder.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib5ed/Hash/SHA2Builder.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib5ed/Hash/SHA3Builder.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib37c/Update/HttpsOTAUpdate.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib37c/Update/Updater.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib37c/Update/UpdaterSHA256.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib37c/Update/UpdaterSHA512.cpp.o
+Archiving .pio/build/xiao_esp32c3/lib15e/libStringUtils.a
+Compiling .pio/build/xiao_esp32c3/lib37c/Update/Updater_Signing.cpp.o
+Indexing .pio/build/xiao_esp32c3/lib15e/libStringUtils.a
+Archiving .pio/build/xiao_esp32c3/lib5ed/libHash.a
+Compiling .pio/build/xiao_esp32c3/libce7/Network/NetworkClient.cpp.o
+Indexing .pio/build/xiao_esp32c3/lib5ed/libHash.a
+Compiling .pio/build/xiao_esp32c3/libce7/Network/NetworkEvents.cpp.o
+Compiling .pio/build/xiao_esp32c3/libce7/Network/NetworkInterface.cpp.o
+In file included from .pio/libdeps/xiao_esp32c3/Settings/src/./core/SettingsBase.h:18,
+                 from .pio/libdeps/xiao_esp32c3/Settings/src/SettingsT.h:9,
+                 from .pio/libdeps/xiao_esp32c3/Settings/src/SettingsGyver.h:4,
+                 from src/main.cpp:12:
+.pio/libdeps/xiao_esp32c3/Settings/src/./core/./HybridFS.h: In member function 'void FSWrapper::listDir(String&, const char*, char, char, const char*)':
+.pio/libdeps/xiao_esp32c3/Settings/src/./core/./HybridFS.h:125:41: warning: suggest parentheses around assignment used as truth value [-Wparentheses]
+  125 |         while (file = root.openNextFile()) {
+      |                                         ^
+Compiling .pio/build/xiao_esp32c3/libce7/Network/NetworkManager.cpp.o
+Compiling .pio/build/xiao_esp32c3/libce7/Network/NetworkServer.cpp.o
+Archiving .pio/build/xiao_esp32c3/lib37c/libUpdate.a
+Indexing .pio/build/xiao_esp32c3/lib37c/libUpdate.a
+Compiling .pio/build/xiao_esp32c3/libce7/Network/NetworkUdp.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib34e/WiFi/AP.cpp.o
+esptool v5.4.0
+Compiling .pio/build/xiao_esp32c3/lib34e/WiFi/STA.cpp.o
+Creating ESP32-C3 image...
+Merged 2 ELF sections.
+Successfully created ESP32-C3 image.
+Compiling .pio/build/xiao_esp32c3/lib34e/WiFi/WiFi.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib34e/WiFi/WiFiAP.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib34e/WiFi/WiFiGeneric.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib34e/WiFi/WiFiMulti.cpp.o
+Archiving .pio/build/xiao_esp32c3/libce7/libNetwork.a
+Indexing .pio/build/xiao_esp32c3/libce7/libNetwork.a
+Compiling .pio/build/xiao_esp32c3/lib34e/WiFi/WiFiSTA.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib34e/WiFi/WiFiScan.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib3fe/NetworkClientSecure/NetworkClientSecure.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib3fe/NetworkClientSecure/ssl_client.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib78a/LittleFS/LittleFS.cpp.o
+Compiling .pio/build/xiao_esp32c3/libcec/AsyncUDP/AsyncUDP.cpp.o
+Compiling .pio/build/xiao_esp32c3/libe3f/DNSServer/DNSServer.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib99d/ESPmDNS/ESPmDNS.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib28c/Stamp/core/StampUtils.cpp.o
+Archiving .pio/build/xiao_esp32c3/lib34e/libWiFi.a
+Indexing .pio/build/xiao_esp32c3/lib34e/libWiFi.a
+Compiling .pio/build/xiao_esp32c3/lib28c/Stamp/core/stamp_zone.cpp.o
+Archiving .pio/build/xiao_esp32c3/libcec/libAsyncUDP.a
+Compiling .pio/build/xiao_esp32c3/libf49/Settings/core/SettingsBase_class 2.cpp.o
+Indexing .pio/build/xiao_esp32c3/libcec/libAsyncUDP.a
+Archiving .pio/build/xiao_esp32c3/lib28c/libStamp.a
+Compiling .pio/build/xiao_esp32c3/libf49/Settings/core/SettingsBase_class.cpp.o
+Compiling .pio/build/xiao_esp32c3/libf49/Settings/core/ota 2.cpp.o
+Indexing .pio/build/xiao_esp32c3/lib28c/libStamp.a
+Compiling .pio/build/xiao_esp32c3/libf49/Settings/core/ota.cpp.o
+Archiving .pio/build/xiao_esp32c3/lib78a/libLittleFS.a
+Compiling .pio/build/xiao_esp32c3/libdc2/SPI/SPI.cpp.o
+Archiving .pio/build/xiao_esp32c3/lib99d/libESPmDNS.a
+Compiling .pio/build/xiao_esp32c3/lib43e/GyverIO/shift/shift.cpp.o
+Indexing .pio/build/xiao_esp32c3/lib78a/libLittleFS.a
+Indexing .pio/build/xiao_esp32c3/lib99d/libESPmDNS.a
+Compiling .pio/build/xiao_esp32c3/lib8df/EncButton/core/io 2.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib8df/EncButton/core/io.cpp.o
+Archiving .pio/build/xiao_esp32c3/lib3fe/libNetworkClientSecure.a
+Archiving .pio/build/xiao_esp32c3/libe3f/libDNSServer.a
+Indexing .pio/build/xiao_esp32c3/lib3fe/libNetworkClientSecure.a
+Indexing .pio/build/xiao_esp32c3/libe3f/libDNSServer.a
+Compiling .pio/build/xiao_esp32c3/lib8df/EncButton/core/self 2.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib8df/EncButton/core/self.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib12a/Wire/Wire.cpp.o
+Compiling .pio/build/xiao_esp32c3/libdb4/Adafruit BusIO/Adafruit_BusIO_Register.cpp.o
+Archiving .pio/build/xiao_esp32c3/libdc2/libSPI.a
+Archiving .pio/build/xiao_esp32c3/lib43e/libGyverIO.a
+Compiling .pio/build/xiao_esp32c3/libdb4/Adafruit BusIO/Adafruit_GenericDevice.cpp.o
+Indexing .pio/build/xiao_esp32c3/libdc2/libSPI.a
+Indexing .pio/build/xiao_esp32c3/lib43e/libGyverIO.a
+Archiving .pio/build/xiao_esp32c3/lib8df/libEncButton.a
+Compiling .pio/build/xiao_esp32c3/libdb4/Adafruit BusIO/Adafruit_I2CDevice.cpp.o
+Compiling .pio/build/xiao_esp32c3/libdb4/Adafruit BusIO/Adafruit_SPIDevice.cpp.o
+Indexing .pio/build/xiao_esp32c3/lib8df/libEncButton.a
+Compiling .pio/build/xiao_esp32c3/lib345/Adafruit Unified Sensor/Adafruit_Sensor.cpp.o
+Compiling .pio/build/xiao_esp32c3/libe54/Adafruit LSM6DS/Adafruit_ISM330DHCX.cpp.o
+Archiving .pio/build/xiao_esp32c3/libf49/libSettings.a
+Indexing .pio/build/xiao_esp32c3/libf49/libSettings.a
+Compiling .pio/build/xiao_esp32c3/libe54/Adafruit LSM6DS/Adafruit_LSM6DS.cpp.o
+Compiling .pio/build/xiao_esp32c3/libe54/Adafruit LSM6DS/Adafruit_LSM6DS3.cpp.o
+Archiving .pio/build/xiao_esp32c3/lib12a/libWire.a
+Indexing .pio/build/xiao_esp32c3/lib12a/libWire.a
+Compiling .pio/build/xiao_esp32c3/libe54/Adafruit LSM6DS/Adafruit_LSM6DS33.cpp.o
+Compiling .pio/build/xiao_esp32c3/libe54/Adafruit LSM6DS/Adafruit_LSM6DS3TRC.cpp.o
+Compiling .pio/build/xiao_esp32c3/libe54/Adafruit LSM6DS/Adafruit_LSM6DSL.cpp.o
+Archiving .pio/build/xiao_esp32c3/libdb4/libAdafruit BusIO.a
+Compiling .pio/build/xiao_esp32c3/libe54/Adafruit LSM6DS/Adafruit_LSM6DSO32.cpp.o
+Archiving .pio/build/xiao_esp32c3/lib345/libAdafruit Unified Sensor.a
+Indexing .pio/build/xiao_esp32c3/libdb4/libAdafruit BusIO.a
+Indexing .pio/build/xiao_esp32c3/lib345/libAdafruit Unified Sensor.a
+Compiling .pio/build/xiao_esp32c3/libe54/Adafruit LSM6DS/Adafruit_LSM6DSOX.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/ColorFormat.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/Esp.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/FirmwareMSC.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/FunctionalInterrupt.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/HEXBuilder.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/HWCDC.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/HardwareSerial.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/HashBuilder.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/IPAddress.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/MD5Builder.cpp.o
+Archiving .pio/build/xiao_esp32c3/libe54/libAdafruit LSM6DS.a
+Indexing .pio/build/xiao_esp32c3/libe54/libAdafruit LSM6DS.a
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/MacAddress.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/Print.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/Stream.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/StreamString.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/StringUtils.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/Tone.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/USB.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/USBCDC.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/USBHost.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/USBMSC.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/WMath.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/WString.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/base64.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/cbuf.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/chip-debug-report.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-adc.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-bt.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-cpu.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-dac.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-gpio.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-hosted.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-i2c-ng.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-i2c-slave.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-i2c.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-ldo.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-ledc.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-log-wrapper.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-matrix.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-misc.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-periman.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-psram.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-rgb-led.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-rmt.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-sigmadelta.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-spi.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-time.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-timer.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-tinyusb.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-touch-ng.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-touch.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-uart.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/firmware_msc_fat.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/freertos_stats.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/idf_openthread_mpool_wrapper.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/libb64/cdecode.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/libb64/cencode.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/main.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/stdlib_noniso.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/wiring_pulse.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/wiring_shift.c.o
+Archiving .pio/build/xiao_esp32c3/libFrameworkArduino.a
+Indexing .pio/build/xiao_esp32c3/libFrameworkArduino.a
+Linking .pio/build/xiao_esp32c3/firmware.elf
+Retrieving maximum program size .pio/build/xiao_esp32c3/firmware.elf
+Checking size .pio/build/xiao_esp32c3/firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [=         ]  12.7% (used 41660 bytes from 327680 bytes)
+Flash: [========= ]  86.7% (used 1136369 bytes from 1310720 bytes)
+Building .pio/build/xiao_esp32c3/firmware.bin
+esptool v5.4.0
+Creating ESP32-C3 image...
+Merged 3 ELF sections.
+Successfully created ESP32-C3 image.
+Configuring upload protocol...
+AVAILABLE: cmsis-dap, esp-bridge, esp-builtin, esp-prog, espota, esptool, iot-bus-jtag, jlink, minimodule, olimex-arm-usb-ocd, olimex-arm-usb-ocd-h, olimex-arm-usb-tiny-h, olimex-jtag-tiny, tumpa
+CURRENT: upload_protocol = esptool
+Looking for upload port...
+Using manually specified: /dev/cu.usbmodem1142301
+Uploading .pio/build/xiao_esp32c3/firmware.bin
+esptool v5.4.0
+Serial port /dev/cu.usbmodem1142301:
+Connecting...
+Connected to ESP32-C3 on /dev/cu.usbmodem1142301:
+Chip type:          ESP32-C3 (QFN32) (revision v0.4)
+Features:           Wi-Fi, BT 5 (LE), Single Core, 160MHz, Embedded Flash 4MB (XMC)
+Crystal frequency:  40MHz
+USB mode:           USB-Serial/JTAG
+Device identifier: [redacted]
+
+Uploading stub flasher...
+Running stub flasher...
+Stub flasher running.
+Changing baud rate to 460800...
+Changed.
+
+Configuring flash size...
+
+Writing '/Users/macbook-air/Documents/Projects/Fishing Bite sensor/.pio/build/xiao_esp32c3/bootloader.bin' at 0x00000000...
+SHA digest in image updated.
+Flash will be erased from 0x00000000 to 0x00004fff...
+Compressed 19536 bytes to 12717...
+Writing at 0x00004c50 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100.0% 12.42kB/12.42kB [0s] 
+Wrote 19536 bytes (12717 compressed) at 0x00000000 in 0.3 seconds (576.9 kbit/s).
+Verifying written data...
+Hash of data verified.
+
+Writing '/Users/macbook-air/Documents/Projects/Fishing Bite sensor/.pio/build/xiao_esp32c3/partitions.bin' at 0x00008000...
+Flash will be erased from 0x00008000 to 0x00008fff...
+Compressed 3072 bytes to 146...
+Writing at 0x00008c00 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100.0% 146B/146B [0s] 
+Wrote 3072 bytes (146 compressed) at 0x00008000 in 0.0 seconds (1229.8 kbit/s).
+Verifying written data...
+Hash of data verified.
+
+Writing '/private/tmp/fishing-bench-core/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin' at 0x0000e000...
+Flash will be erased from 0x0000e000 to 0x0000ffff...
+Compressed 8192 bytes to 47...
+Writing at 0x00010000 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100.0% 47B/47B [0s] 
+Wrote 8192 bytes (47 compressed) at 0x0000e000 in 0.1 seconds (1056.9 kbit/s).
+Verifying written data...
+Hash of data verified.
+
+Writing '.pio/build/xiao_esp32c3/firmware.bin' at 0x00010000...
+Flash will be erased from 0x00010000 to 0x0012ffff...
+Compressed 1178800 bytes to 734822...
+Writing at 0x0001b970 ╸                                2.2% 16.00kB/717.60kB [0s] 
+Writing at 0x000262e7 ━                                4.5% 32.00kB/717.60kB [0s] 
+Writing at 0x0002a20b ━━                               6.7% 48.00kB/717.60kB [1s] 
+Writing at 0x000305f4 ━━╸                              8.9% 64.00kB/717.60kB [1s] 
+Writing at 0x000385c2 ━━━                             11.1% 80.00kB/717.60kB [2s] 
+Writing at 0x00042931 ━━━━                            13.4% 96.00kB/717.60kB [3s] 
+Writing at 0x00049da6 ━━━━╸                           15.6% 112.00kB/717.60kB [3s] 
+Writing at 0x000500e2 ━━━━━                           17.8% 128.00kB/717.60kB [4s] 
+Writing at 0x00055cfb ━━━━━━                          20.1% 144.00kB/717.60kB [4s] 
+Writing at 0x0005c4aa ━━━━━━╸                         22.3% 160.00kB/717.60kB [5s] 
+Writing at 0x0006228c ━━━━━━━                         24.5% 176.00kB/717.60kB [5s] 
+Writing at 0x00068884 ━━━━━━━━                        26.8% 192.00kB/717.60kB [5s] 
+Writing at 0x0006f3f9 ━━━━━━━━╸                       29.0% 208.00kB/717.60kB [5s] 
+Writing at 0x00075943 ━━━━━━━━━                       31.2% 224.00kB/717.60kB [5s] 
+Writing at 0x0007b9ae ━━━━━━━━━━                      33.4% 240.00kB/717.60kB [5s] 
+Writing at 0x0008189c ━━━━━━━━━━╸                     35.7% 256.00kB/717.60kB [5s] 
+Writing at 0x00087b14 ━━━━━━━━━━━                     37.9% 272.00kB/717.60kB [5s] 
+Writing at 0x0008dfda ━━━━━━━━━━━━                    40.1% 288.00kB/717.60kB [5s] 
+Writing at 0x00093e1a ━━━━━━━━━━━━╸                   42.4% 304.00kB/717.60kB [5s] 
+Writing at 0x00099fb5 ━━━━━━━━━━━━━                   44.6% 320.00kB/717.60kB [6s] 
+Writing at 0x0009ff74 ━━━━━━━━━━━━━━                  46.8% 336.00kB/717.60kB [6s] 
+Writing at 0x000a592f ━━━━━━━━━━━━━━╸                 49.1% 352.00kB/717.60kB [6s] 
+Writing at 0x000ab14a ━━━━━━━━━━━━━━━                 51.3% 368.00kB/717.60kB [6s] 
+Writing at 0x000b0ac1 ━━━━━━━━━━━━━━━━                53.5% 384.00kB/717.60kB [6s] 
+Writing at 0x000b6eb1 ━━━━━━━━━━━━━━━━╸               55.7% 400.00kB/717.60kB [6s] 
+Writing at 0x000bd6e5 ━━━━━━━━━━━━━━━━━               58.0% 416.00kB/717.60kB [6s] 
+Writing at 0x000c332c ━━━━━━━━━━━━━━━━━━              60.2% 432.00kB/717.60kB [6s] 
+Writing at 0x000c8d5e ━━━━━━━━━━━━━━━━━━╸             62.4% 448.00kB/717.60kB [6s] 
+Writing at 0x000ce991 ━━━━━━━━━━━━━━━━━━━             64.7% 464.00kB/717.60kB [6s] 
+Writing at 0x000d444c ━━━━━━━━━━━━━━━━━━━━            66.9% 480.00kB/717.60kB [6s] 
+Writing at 0x000dabb2 ━━━━━━━━━━━━━━━━━━━━╸           69.1% 496.00kB/717.60kB [7s] 
+Writing at 0x000e07bd ━━━━━━━━━━━━━━━━━━━━━           71.3% 512.00kB/717.60kB [7s] 
+Writing at 0x000e6563 ━━━━━━━━━━━━━━━━━━━━━━          73.6% 528.00kB/717.60kB [7s] 
+Writing at 0x000ec76b ━━━━━━━━━━━━━━━━━━━━━━╸         75.8% 544.00kB/717.60kB [7s] 
+Writing at 0x000f2949 ━━━━━━━━━━━━━━━━━━━━━━━         78.0% 560.00kB/717.60kB [7s] 
+Writing at 0x000f8add ━━━━━━━━━━━━━━━━━━━━━━━━        80.3% 576.00kB/717.60kB [7s] 
+Writing at 0x000febc5 ━━━━━━━━━━━━━━━━━━━━━━━━╸       82.5% 592.00kB/717.60kB [7s] 
+Writing at 0x00104f0c ━━━━━━━━━━━━━━━━━━━━━━━━━       84.7% 608.00kB/717.60kB [7s] 
+Writing at 0x0010b20b ━━━━━━━━━━━━━━━━━━━━━━━━━━      87.0% 624.00kB/717.60kB [7s] 
+Writing at 0x0011119c ━━━━━━━━━━━━━━━━━━━━━━━━━━╸     89.2% 640.00kB/717.60kB [7s] 
+Writing at 0x00116f5b ━━━━━━━━━━━━━━━━━━━━━━━━━━━     91.4% 656.00kB/717.60kB [8s] 
+Writing at 0x0011e738 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━    93.6% 672.00kB/717.60kB [8s] 
+Writing at 0x001240df ━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸   95.9% 688.00kB/717.60kB [8s] 
+Writing at 0x0012a7d3 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━   98.1% 704.00kB/717.60kB [8s] 
+Writing at 0x0012fcb0 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100.0% 717.60kB/717.60kB [8s] 
+Wrote 1178800 bytes (734822 compressed) at 0x00010000 in 8.5 seconds (1110.4 kbit/s).
+Verifying written data...
+Hash of data verified.
+
+Hard resetting via RTS pin...
+========================= [SUCCESS] Took 35.94 seconds =========================
+
+Environment    Status    Duration
+-------------  --------  ------------
+xiao_esp32c3   SUCCESS   00:00:35.935
+========================= 1 succeeded in 00:00:35.935 =========================

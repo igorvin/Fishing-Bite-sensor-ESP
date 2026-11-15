@@ -2,19 +2,19 @@ window.STATE =
 {
   "version": 2,
   "slug": "functional-audit",
-  "dir": "2026-11-14-functional-audit",
+  "dir": "2026-11-14-functional-audit--wip",
   "title": "Полный аудит и план переработки датчика поклёвки",
   "mode": "semi",
   "depth": "normal",
   "tier": "T0",
-  "briefFile": "2026-11-14-brief.md",
+  "briefFile": "2026-11-15-brief.md",
   "memoryFile": "CLAUDE.md",
   "memoryOwner": "user",
   "skillDir": "/Users/macbook-air/.agents/skills/autopilot",
   "baseCommit": "3b08e96",
   "startedAt": "2026-11-14T22:51:11+02:00",
-  "updatedAt": "2026-11-15T08:06:53+02:00",
-  "finishedAt": "2026-11-15T08:06:53+02:00",
+  "updatedAt": "2026-11-15T19:34:06+02:00",
+  "finishedAt": null,
   "stages": [
     {
       "id": "preflight",
@@ -25,51 +25,40 @@ window.STATE =
     {
       "id": "manifest",
       "status": "done",
-      "startedAt": "2026-11-14T22:54:02+02:00",
-      "finishedAt": "2026-11-14T22:54:02+02:00"
+      "startedAt": "2026-11-15T19:30:41+02:00",
+      "finishedAt": "2026-11-15T19:30:44+02:00"
     },
     {
       "id": "briefing",
-      "status": "done",
-      "startedAt": "2026-11-14T22:54:02+02:00",
-      "finishedAt": "2026-11-14T23:06:59+02:00"
+      "status": "active",
+      "startedAt": "2026-11-15T19:30:44+02:00"
     },
     {
       "id": "spec",
-      "status": "done",
-      "startedAt": "2026-11-14T23:06:59+02:00",
-      "finishedAt": "2026-11-14T23:07:00+02:00"
+      "status": "pending"
     },
     {
       "id": "plan",
-      "status": "done",
-      "startedAt": "2026-11-14T23:07:00+02:00",
-      "finishedAt": "2026-11-14T23:32:29+02:00"
+      "status": "pending"
     },
     {
       "id": "build",
-      "status": "done",
-      "startedAt": "2026-11-14T23:32:29+02:00",
-      "finishedAt": "2026-11-15T00:00:36+02:00"
+      "status": "pending"
     },
     {
       "id": "review",
-      "status": "done",
-      "startedAt": "2026-11-15T00:00:36+02:00",
-      "finishedAt": "2026-11-15T07:55:49+02:00"
+      "status": "pending"
     },
     {
       "id": "final",
-      "status": "done",
-      "startedAt": "2026-11-15T07:55:49+02:00",
-      "finishedAt": "2026-11-15T08:06:53+02:00"
+      "status": "pending"
     }
   ],
   "requirements": {
-    "total": 18,
+    "total": 22,
     "done": 18,
     "inTicket": 0,
-    "inSpec": 0,
+    "inSpec": 4,
     "placeholder": 0,
     "deferred": 0,
     "dropped": 0
@@ -173,11 +162,7 @@ window.STATE =
     "items": []
   },
   "concerns": [],
-  "blind": {
-    "checked": 18,
-    "matched": 18,
-    "mismatches": []
-  },
+  "blind": null,
   "beats": [
     "2026-11-14T22:51:11+02:00",
     "2026-11-14T22:54:02+02:00",
@@ -194,10 +179,17 @@ window.STATE =
     "2026-11-15T00:12:50+02:00",
     "2026-11-15T07:55:49+02:00",
     "2026-11-15T08:05:31+02:00",
-    "2026-11-15T08:06:53+02:00"
+    "2026-11-15T08:06:53+02:00",
+    "2026-11-15T19:30:41+02:00",
+    "2026-11-15T19:30:44+02:00",
+    "2026-11-15T19:34:06+02:00"
   ],
-  "rev": 45,
-  "waiting": null,
+  "rev": 50,
+  "waiting": {
+    "kind": "briefing",
+    "since": "2026-11-15T19:34:06+02:00",
+    "note": "C3 прошита и данные верифицированы. Пользователь выполняет ручную проверку и вернётся с результатами; ожидаются измерения/наблюдения стенда."
+  },
   "waits": [
     {
       "kind": "briefing",
@@ -485,6 +477,28 @@ window.STATE =
       "k": "finish",
       "result": "Первый стендовый датчик: XYZ/шум/чувствительность, suppression/recovery, 29 тестов, clean C3/S3 прошивки; аппаратная проверка впереди",
       "problems": 0
+    },
+    {
+      "t": "2026-11-15T19:30:41+02:00",
+      "k": "reopen"
+    },
+    {
+      "t": "2026-11-15T19:30:44+02:00",
+      "k": "stage",
+      "id": "manifest",
+      "act": "start"
+    },
+    {
+      "t": "2026-11-15T19:30:44+02:00",
+      "k": "stage",
+      "id": "briefing",
+      "act": "start"
+    },
+    {
+      "t": "2026-11-15T19:34:06+02:00",
+      "k": "ask",
+      "kind": "briefing",
+      "note": "C3 прошита и данные верифицированы. Пользователь выполняет ручную проверку и вернётся с результатами; ожидаются измерения/наблюдения стенда."
     }
   ],
   "reqList": [
@@ -577,35 +591,30 @@ window.STATE =
       "id": "G12",
       "text": "«Lets start»",
       "status": "done"
+    },
+    {
+      "id": "G13",
+      "text": "«давай продолжим реализацию тех вещей, которые ты сказал»",
+      "status": "in-spec"
+    },
+    {
+      "id": "G14",
+      "text": "«можешь делать upload на саму ESP-шку код, я разрешаю»",
+      "status": "in-spec"
+    },
+    {
+      "id": "G15",
+      "text": "«не надо делать никаких бэкапов, просто сразу делай upload»",
+      "status": "in-spec"
+    },
+    {
+      "id": "G16",
+      "text": "«Это C3, я ошибся»",
+      "status": "in-spec"
     }
   ],
-  "gates": {
-    "G1": {
-      "ok": true,
-      "at": "2026-11-14T23:06:59+02:00",
-      "open": 0,
-      "total": 18
-    },
-    "G2": {
-      "ok": true,
-      "at": "2026-11-14T23:32:29+02:00",
-      "found": 1,
-      "fixed": 1,
-      "deferred": 0
-    },
-    "G3": {
-      "ok": true,
-      "at": "2026-11-15T00:05:03+02:00",
-      "problems": 0
-    },
-    "G4": {
-      "ok": true,
-      "at": "2026-11-15T08:05:31+02:00",
-      "checked": 18,
-      "matched": 18
-    }
-  },
-  "result": "Первый стендовый датчик: XYZ/шум/чувствительность, suppression/recovery, 29 тестов, clean C3/S3 прошивки; аппаратная проверка впереди",
+  "gates": {},
+  "result": null,
   "report": [
     "Аудит и план готовы; прошивки не изменены, четыре таска — будущая работа",
     "Основной датчик XIAO ESP32-S3; временное подавление с возвратом подтверждено пользователем",
@@ -618,5 +627,5 @@ window.STATE =
     "Текущий итог supersedes исторический аудит: sensor реализован, source1b8c6b6, cleanclone18/18software, F1закрыт",
     "Физическая эффективность и автономность не подтверждены; это ограничение доказательств, не softwaremismatch"
   ],
-  "blindRounds": 1
+  "blindRounds": 0
 }
