@@ -1,3 +1,5 @@
+> Applied to CLAUDE.md on 2026-11-15 following the user request to update documentation. The text below is the original proposal.
+
 # Предложение краткой памяти проекта (T0)
 
 ## Текущее состояние

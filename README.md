@@ -2,7 +2,7 @@
 
 A two-device ESP-NOW rod-motion prototype: an LSM6DS3 sensor and a separate SH1106 receiver hub. The current bench is Seeed XIAO ESP32-C3; the planned rod sensor is Seeed XIAO ESP32-S3. **Field bite-detection accuracy and battery endurance are not measured.**
 
-[Русская версия](README_RU.md) · [Detailed bench/flash/CSV instructions](docs/bench-testing.md)
+[Русская версия](README_RU.md) · [Release scope, validation and local binaries](docs/bench-release.md) · [Detailed bench/flash/CSV instructions](docs/bench-testing.md)
 
 ## Current sensor behavior
 
