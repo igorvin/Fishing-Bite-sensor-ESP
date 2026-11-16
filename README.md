@@ -11,7 +11,7 @@ A two-device ESP-NOW rod-motion prototype: an LSM6DS3 sensor and a separate SH11
 - Asynchronous 2-second quiet noise calibration, movement rejection; manual threshold/noise multiplier persist separately from the legacy `deltaG` key.
 - Nonblocking output pulses; passive-buzzer maximum maps to 50% carrier duty, not DC.
 - Temporary movement suppression, then automatic recovery at the stable **new** orientation. Manual disarm and IMU fault never auto-arm.
-- Web Status / Sensor / Settings / Diagnostics, English/Russian labels; full-rate bounded Serial CSV and host replay using the firmware core.
+- Mobile Web Status / Sensor / Settings with collapsible technical details, English/Russian labels; full-rate bounded Serial CSV and host replay using the firmware core.
 - Original packed 22-byte BitePacket stays compatible with the existing hub; no application-level ACK is added in this release.
 
 There is **no 10+10-second Smart Learn procedure**. Noise calibration measures quiet acceleration noise; it is not training a classifier for fish or rod poses.

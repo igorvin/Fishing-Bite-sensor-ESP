@@ -17,6 +17,7 @@
 #include "CsvBuffer.h"
 #include "ConfigDatabase.h"
 #include "ImuSession.h"
+#include "MobileUi.h"
 
 // Keep original key hashes and 22-byte wire contract. New semantics use new keys.
 DB_KEYS(kk,name,deltaG,shortPulse,pulsePeriod,contThresh,armedSw,langIdx,testAlarm,apPass,saveRB,buzVol,ledRedLvl,ledGreenLvl,espNowEn,hubMac);
@@ -33,7 +34,7 @@ bite::Pulse alarmPulse,beep;
 bite::CsvBuffer<2048> csvBuffer;
 bite::Calibration previousCalibration=bite::Calibration::None;
 bite::StateClock apClock,disarmedClock;
-bool storageOK=false,pwmOK=false;
+bool storageOK=false,pwmOK=false,showDetails=false;
 bool apActive=true,radioReady=false,radioEn=false,csv=false,armUi=false;
 bool saveConfig=false,calRequest=false,testRequest=false,networkRequest=false;
 bool shutdownPending=false,sleepAttempted=false;
@@ -56,7 +57,7 @@ namespace ui {
 constexpr size_t menu=2000,lang=2001,arm=2002,algorithm=2003,threshold=2004,noise=2005,legacy=2006;
 constexpr size_t pulse=2007,period=2008,continuous=2009,suppress=2010,up=2011,tilt=2012,hold=2013;
 constexpr size_t vol=2014,green=2015,red=2016,name=2017,pass=2018,mac=2019,radio=2020,save=2021,cal=2022,test=2023,capture=2024;
-constexpr size_t state=2100,health=2101,xyz=2102,signals=2103,noiseInfo=2104,calInfo=2105,battery=2106,stats=2107,timing=2108,sleep=2109,radioInfo=2110,message=2111;
+constexpr size_t state=2100,health=2101,xyz=2102,signals=2103,noiseInfo=2104,calInfo=2105,battery=2106,stats=2107,timing=2108,sleep=2109,radioInfo=2110,message=2111,details=2112,radioDetails=2113,batteryRaw=2114;
 }
 
 void stopOutputs(){alarmPulse.stop();beep.stop();}
@@ -159,58 +160,80 @@ void loadConfig(){
 
 void build(sets::Builder& b){
     using namespace sets;
-    if(page>3)page=0;
-    {Group g(b,tr("Menu","Меню"));if(b.Select(ui::menu,tr("Page","Страница"),tr("Status\nSensor\nSettings\nDiagnostics","Статус\nДатчик\nНастройки\nДиагностика"),AnyPtr(&page)))b.reload();}
-    if(page==0||page==3){Group g(b,tr("Status / diagnostics","Статус / диагностика"));
-        b.Label(ui::state,tr("State","Состояние"));b.Label(ui::health,tr("IMU / outputs / storage","IMU / выходы / хранилище"));
-        b.Label(ui::xyz,"XYZ (g)");b.Label(ui::signals,tr("Dynamic / legacy (g)","Динамический / прежний (g)"));
-        b.Label(ui::noiseInfo,tr("Noise / effective threshold (g)","Шум / рабочий порог (g)"));b.Label(ui::calInfo,tr("Calibration","Калибровка"));
-        b.Label(ui::battery,tr("Battery (approximate)","Батарея (приблизительно)"));b.Label(ui::stats,tr("Events / pulses / suppressed ms","События / импульсы / подавление мс"));
-        b.Label(ui::timing,tr("Rate / gaps / I2C errors","Частота / пропуски / ошибки I2C"));b.Label(ui::sleep,tr("Sleep","Сон"));b.Label(ui::radioInfo,"ESP-NOW");b.Label(ui::message,tr("Result","Результат"));
-        if(b.Button(ui::cal,tr("Calibrate noise: keep still 2 s","Калибровка шума: неподвижно 2 с")))calRequest=true;
-        if(b.Button(ui::test,tr("Local test pulse (no radio)","Тест сигнала (без радио)")))testRequest=true;
-        if(b.Switch(ui::arm,tr("Arm / disarm","Охрана"),&armUi))setArmed(armUi,millis());
-        if(b.Switch(ui::capture,tr("Serial CSV (fresh samples, max 104 Hz)","Serial CSV (новые выборки, до 104 Гц)"),&csv)){csvBuffer.clear();if(csv){const char* header="ms,ax_g,ay_g,az_g,dynamic_g,legacy_g,noise_g,threshold_g,state,event,mode\n";csvBuffer.append(header,strlen(header));}}
+    if(page>2)page=0;
+    b.Custom("BenchLayout",2199);
+    {Group g(b,tr("Menu","Меню"));if(b.Select(ui::menu,tr("Page","Страница"),tr("Status\nSensor\nSettings","Статус\nДатчик\nНастройки"),AnyPtr(&page)))b.reload();}
+    if(page==0){
+        {Group g(b,tr("Status","Статус"));
+            b.Label(ui::state,tr("State","Состояние"));
+            b.Label(ui::calInfo,tr("Calibration","Калибровка"));
+            b.Label(ui::battery,tr("Battery (approx.)","Батарея (≈)"));
+            b.Label(ui::radioInfo,"ESP-NOW");
+        }
+        {Group g(b,tr("Controls","Управление"));
+            if(b.Switch(ui::arm,tr("Armed","Охрана"),&armUi))setArmed(armUi,millis());
+            if(b.Button(ui::cal,tr("Calibrate · keep still 2 s","Калибровка · не трогать 2 с")))calRequest=true;
+            if(b.Button(ui::test,tr("Test sound / LED","Тест звука / LED")))testRequest=true;
+            if(b.Switch(ui::capture,"Serial CSV",&csv)){csvBuffer.clear();if(csv){const char* header="ms,ax_g,ay_g,az_g,dynamic_g,legacy_g,noise_g,threshold_g,state,event,mode\n";csvBuffer.append(header,strlen(header));}}
+        }
+        if(b.Switch(ui::details,tr("Details","Подробности"),&showDetails))b.reload();
+        if(showDetails){Group g(b,tr("Technical details","Технические данные"));
+            b.Label(ui::health,tr("IMU / PWM / storage","IMU / PWM / память"));
+            b.Label(ui::xyz,"XYZ, g");b.Label(ui::signals,tr("Dynamic / legacy, g","Dynamic / Legacy, g"));
+            b.Label(ui::noiseInfo,tr("Noise / threshold, g","Шум / порог, g"));
+            b.Label(ui::batteryRaw,tr("Battery ADC","Батарея: АЦП"));
+            b.Label(ui::stats,tr("Events / pulses / suppressed ms","События / импульсы / подавление, мс"));
+            b.Label(ui::timing,tr("Hz / gaps / I2C errors","Гц / пропуски / ошибки I2C"));
+            b.Label(ui::sleep,tr("Sleep","Сон"));b.Label(ui::radioDetails,tr("ESP-NOW counters","ESP-NOW: счётчики"));
+            b.Label(ui::message,tr("Last message","Последнее сообщение"));
+            b.Paragraph("",tr("Serial CSV: fresh samples, up to 104 Hz. Test sound does not send radio.","Serial CSV: новые выборки, до 104 Гц. Тест звука не отправляет радио."));
+        }
     }
     if(page==1){Group g(b,tr("Detection","Детекция"));
+        b.Paragraph("",tr("Lower threshold = more sensitive. Noise protection may raise the effective threshold.","Меньше порог — выше чувствительность. Защита от шума может повысить рабочий порог."));
         if(b.Select(ui::algorithm,tr("Algorithm","Алгоритм"),"Dynamic XYZ\nLegacy magnitude",AnyPtr(&mode))){saveConfig=true;b.reload();}
-        if(mode==0){if(b.Slider(ui::threshold,tr("Threshold: lower = more sensitive","Порог: меньше = чувствительнее"),.002f,.5f,.001f,"g",AnyPtr(&draft.thresholdG)))saveConfig=true;
-            if(b.Slider(ui::noise,tr("Noise protection multiplier","Множитель защиты от шума"),1,10,.5f,"",AnyPtr(&draft.noiseMultiplier)))saveConfig=true;
-        }else if(b.Slider(ui::legacy,tr("Legacy magnitude threshold","Прежний порог модуля"),.02f,1,.01f,"g",AnyPtr(&draft.legacyThresholdG)))saveConfig=true;
-        if(b.Slider(ui::pulse,tr("Pulse duration","Длительность импульса"),40,1000,10,"ms",AnyPtr(&pulseMs)))saveConfig=true;
-        if(b.Slider(ui::period,tr("Repeat period","Период повторов"),100,2000,10,"ms",AnyPtr(&draft.repeatMs)))saveConfig=true;
-        if(b.Slider(ui::continuous,tr("Continuous threshold","Порог непрерывности"),50,2000,10,"ms",AnyPtr(&draft.continuousMs)))saveConfig=true;
-        if(b.Switch(ui::suppress,tr("Suppress while moving, then resume","Подавлять при перемещении, затем возобновлять"),&draft.suppression)){saveConfig=true;b.reload();}
+        if(mode==0){if(b.Slider(ui::threshold,tr("Threshold, g","Порог, g"),.002f,.5f,.001f,"g",AnyPtr(&draft.thresholdG)))saveConfig=true;
+            if(b.Slider(ui::noise,tr("Noise multiplier","Защита от шума, ×"),1,10,.5f,"",AnyPtr(&draft.noiseMultiplier)))saveConfig=true;
+        }else if(b.Slider(ui::legacy,tr("Legacy threshold","Порог Legacy"),.02f,1,.01f,"g",AnyPtr(&draft.legacyThresholdG)))saveConfig=true;
+        if(b.Slider(ui::pulse,tr("Alarm pulse","Импульс"),40,1000,10,"ms",AnyPtr(&pulseMs)))saveConfig=true;
+        if(b.Slider(ui::period,tr("Repeat period","Повтор сигнала"),100,2000,10,"ms",AnyPtr(&draft.repeatMs)))saveConfig=true;
+        if(b.Slider(ui::continuous,tr("Continuous delay","Непрерывность"),50,2000,10,"ms",AnyPtr(&draft.continuousMs)))saveConfig=true;
+        if(b.Switch(ui::suppress,tr("Motion suppression","Подавлять перемещение"),&draft.suppression)){saveConfig=true;b.reload();}
         if(draft.suppression){
-            if(b.Slider(ui::up,tr("Pitch threshold (0 off)","Порог наклона UP (0 выкл.)"),0,90,1,"deg",AnyPtr(&draft.upDeg)))saveConfig=true;
-            if(b.Slider(ui::tilt,tr("Roll threshold (0 off)","Порог крена TILT (0 выкл.)"),0,90,1,"deg",AnyPtr(&draft.tiltDeg)))saveConfig=true;
-            if(b.Slider(ui::hold,tr("Movement hold","Удержание перемещения"),50,2000,10,"ms",AnyPtr(&draft.suppressHoldMs)))saveConfig=true;
+            b.Paragraph("",tr("Suppress alarms, then resume when still. Angle 0 = disabled.","Подавлять тревоги и возобновлять после стабилизации. Угол 0 — отключён."));
+            if(b.Slider(ui::up,tr("Pitch limit","Наклон UP"),0,90,1,"deg",AnyPtr(&draft.upDeg)))saveConfig=true;
+            if(b.Slider(ui::tilt,tr("Roll limit","Крен TILT"),0,90,1,"deg",AnyPtr(&draft.tiltDeg)))saveConfig=true;
+            if(b.Slider(ui::hold,tr("Motion hold","Удержание"),50,2000,10,"ms",AnyPtr(&draft.suppressHoldMs)))saveConfig=true;
         }
     }
     if(page==2){Group g(b,tr("Settings","Настройки"));
         if(b.Select(ui::lang,"Language / Язык","English\nРусский",AnyPtr(&language))){saveConfig=true;b.reload();}
-        if(b.Slider(ui::vol,tr("Passive buzzer level","Уровень пассивного зуммера"),0,100,1,"%",AnyPtr(&volume)))saveConfig=true;
+        if(b.Slider(ui::vol,tr("Buzzer volume","Громкость зуммера"),0,100,1,"%",AnyPtr(&volume)))saveConfig=true;
         if(b.Slider(ui::green,tr("Green LED","Зелёный LED"),0,100,1,"%",AnyPtr(&greenLevel)))saveConfig=true;
         if(b.Slider(ui::red,tr("Red LED","Красный LED"),0,100,1,"%",AnyPtr(&redLevel)))saveConfig=true;
-        b.Input(ui::name,tr("AP name (1..32 bytes)","Имя AP (1..32 байта)"),AnyPtr(&draftName));
-        b.Pass(ui::pass,tr("AP password (empty or 8..63 bytes)","Пароль AP (пусто или 8..63 байта)"),AnyPtr(&draftPass));
+        b.Input(ui::name,tr("AP name","Имя Wi-Fi"),AnyPtr(&draftName));
+        b.Pass(ui::pass,tr("AP password","Пароль Wi-Fi"),AnyPtr(&draftPass));
         b.Switch(ui::radio,tr("ESP-NOW enabled","ESP-NOW включён"),&draftRadio);b.Input(ui::mac,tr("Hub unicast MAC","Unicast MAC хаба"),AnyPtr(&draftMac));
-        if(b.Button(ui::save,tr("Validate, save network and restart","Проверить, сохранить сеть и перезапустить")))networkRequest=true;
+        if(b.Button(ui::save,tr("Save network and restart","Сохранить сеть и перезапустить")))networkRequest=true;
     }
 }
 void update(sets::Updater& u){
     const auto& t=sensor.telemetry();
-    u.update(ui::state,String(bite::stateName(sensor.state())));
+    u.update(ui::state,benchStateText(sensor.state(),language));
+    u.update(ui::arm,sensor.desiredArmed());
     u.update(ui::health,String(sensor.healthy()?"IMU OK":"IMU FAULT")+" / PWM "+(pwmOK?"OK":"ERROR")+" / FS "+(storageOK?"OK":"ERROR"));
     u.updateColor(ui::health,sensor.healthy()&&pwmOK?sets::Colors::Green:sets::Colors::Red);
     u.update(ui::xyz,String(t.accel.x,4)+", "+String(t.accel.y,4)+", "+String(t.accel.z,4));
     u.update(ui::signals,String(t.signal.dynamic,4)+" / "+String(t.signal.legacy,4));
     u.update(ui::noiseInfo,String(t.noiseG,4)+" / "+String(t.effectiveG,4)+(t.effectiveG>sensor.config().thresholdG&&!mode?tr(" (noise raised threshold)"," (порог повышен шумом)"):""));
-    u.update(ui::calInfo,String(bite::calibrationName(sensor.calibration()))+" "+String(t.calibrationProgress)+"%");
-    u.update(ui::battery,String(vbat,2)+" V / ~"+String(batteryPct)+"%");
+    u.update(ui::calInfo,benchCalibrationText(sensor.calibration(),t.calibrationProgress,language));
+    u.update(ui::battery,vbat>=2.5f&&vbat<=4.5f?String(vbat,2)+" V / ≈"+String(batteryPct)+"%":String(tr("No valid reading","Нет достоверного замера")));
+    u.update(ui::batteryRaw,String(vbat,2)+" V / ≈"+String(batteryPct)+"%");
     u.update(ui::stats,String(t.events)+" / "+String(pulseCount)+" / "+String(t.suppressedMs));
     u.update(ui::timing,String(sampleRate,1)+" Hz / "+String(t.gaps)+" / "+String(readErrors)+"; CSV dropped="+String(csvDrops));
-    u.update(ui::sleep,sleepNotice);u.update(ui::radioInfo,radioNotice+" TX="+String(txSuccess.load(std::memory_order_relaxed))+" fail="+String(txFail.load(std::memory_order_relaxed)+sendErrors));u.update(ui::message,notice);
+    u.update(ui::sleep,sleepNotice);
+    u.update(ui::radioInfo,!radioEn?tr("Off","Выключен"):radioReady?tr("Ready; hub unconfirmed","Готов; хаб не подтверждён"):tr("Error — see details","Ошибка — см. подробности"));
+    u.update(ui::radioDetails,radioNotice+" TX="+String(txSuccess.load(std::memory_order_relaxed))+" fail="+String(txFail.load(std::memory_order_relaxed)+sendErrors));u.update(ui::message,notice);
 }
 
 void attemptSleep(uint32_t now){
@@ -266,6 +289,7 @@ void setup(){
     loadConfig();Wire.begin(board::sda,board::scl);Wire.setClock(400000);Wire.setTimeOut(20);
     uint32_t now=millis();imuSession.begin(imu,sensor,now);now=millis();enterConfig(now);reconcileRadio();disarmedClock.enter(now);
     sleepNotice=board::wakeAllowed()?"Wake pin accepted; power latch still requires hardware test":"D6 cannot deep-wake this board: automatic deep sleep disabled";
+    sett.setCustom(benchMobileJs,strlen_P(benchMobileJs));
     sett.begin();sett.onBuild(build);sett.onUpdate(update);
     updateBattery();lastBattery=lastRate=now;powerStable=powerPrev=digitalRead(board::powerButton);powerChanged=now;
     esp_task_wdt_config_t wc={.timeout_ms=30000,.idle_core_mask=0,.trigger_panic=true};
