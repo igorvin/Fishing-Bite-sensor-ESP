@@ -1,277 +1,55 @@
-# 🎣 Fishing Bite Sensor – ESP-NOW HUB
+# Fishing Bite Sensor — hub
 
-Central receiver module for wireless fishing rod sensors using **ESP-NOW** on **Seeed Studio XIAO ESP32-S3**.
+Переработанный хаб ESP-NOW для **SH1106, 128×64**: список удилищ в ожидании, крупная тревога и журнал. Это программно проверенный кандидат для стенда; физическая проверка именно хаба ещё не выполнена. Подключённая ранее C3 была датчиком — не загружайте на неё этот проект вместо датчика случайно.
 
----
+## Экраны без кнопок
 
-## 📌 Overview
+- **Список**: до трёх ранее замеченных удилищ на странице. Справа возраст последнего полученного события. Это не подтверждение подключения, охраны или исправности датчика.
+- **Тревога**: номер удилища крупно, имя, тип события и последний переданный датчиком заряд. Поклёвка имеет приоритет над предупреждением батареи. Несколько удилищ показываются последовательно, по 3,5 с каждое; повторные пакеты одного эпизода не удерживают экран бесконечно.
+- **Журнал**: последние эпизоды с номером удилища, типом и возрастом. Продолжения движения в пределах 2 с объединяются с первым событием.
+- Список и журнал автоматически меняются каждые **8 с**, включая дополнительные страницы. Тревога всегда прерывает обычную навигацию. Нет физических кнопок, новые GPIO не назначены.
+- **ХАБ / процент** в верхней строке — приблизительная батарея хаба. **ДАТЧИК / процент** на тревоге — значение из последнего пакета этого датчика. Неверное напряжение хаба показывается `--%`; измерение не определяет наличие аккумулятора автоматически. Датчик пока не передаёт признак достоверности своего процента.
+- MAC, счётчики RX/BAD/DROP/REG находятся в сервисном экране, не на основном.
 
-The **ESP-NOW Hub** is the central unit of a multi-rod wireless bite detection system.
-Each fishing rod has its own ESP32-based sensor with an accelerometer / vibration detection logic. When a bite is detected, the rod sends an instant packet using **ESP-NOW**.
+Нумерация определяется порядком первого пакета после запуска. Реестр (8 отправителей по MAC) и журнал (12 эпизодов) хранятся **только в RAM**: после перезапуска они пусты, номера могут измениться. Одинаковые имена не объединяют разные устройства. Девятый новый отправитель отклоняется до перезапуска (`REG`); существующие восемь продолжают обслуживаться. Журнал при заполнении вытесняет старейший эпизод. Это обратимые инженерные лимиты, не подтверждённое пользователем количество снастей.
 
-The Hub receives these packets and provides immediate local indication using:
+## Надёжность и ограничения
 
-- **OLED display**
-- **Green status LED**
-- **Vibration motor**
+Callback принимает только 22-байтный пакет с eventType 1/2/3, battery 0…100 и конечным неотрицательным deltaG. Имя ограничено 16 байтами, UTF-8 очищается, неполные/неподдерживаемые символы имеют безопасный fallback. В кадрах используется собственный 5×7 алфавит ASCII/кириллица, включая Ё; строчные буквы отображаются прописными, слишком длинные имена сокращаются с точкой.
 
-The Hub is designed for:
+Очередь RX — 24 элемента, защищённая `portMUX`: при заполнении отбрасывает новый пакет и увеличивает DROP, не перезаписывает уже ожидающие. Это ограничивает потери, но **не гарантирует доставку**. Пакет не содержит номера последовательности, heartbeat, ACK и состояния охраны. Отсутствие поклёвок нельзя трактовать как потерю связи. История не может абсолютно различить повторную доставку и новую одинаковую поклёвку.
 
-- **battery-powered outdoor use**
-- **low latency**
-- **low power consumption**
-- **operation without Wi-Fi router or internet**
+Первое событие и последующие type2 одного эпизода объединяются. Новое type1 всегда начинает эпизод. Low-battery одного датчика ограничивается одним эпизодом в минуту; более новое движение этого датчика отменяет его ожидающую старую тревогу, но оставляет запись в журнале. Предупреждение другого удилища сохраняется после поклёвки.
 
----
+OLED не блокирует запуск радио. Адреса 0x3C/0x3D, таймаут Wire 10 мс, повтор подключения каждые 2 с. Ошибка экрана не отключает обработку пакетов/вибрацию. Неподвижный интерфейс тускнеет через 60 с и выключается через 120 с; обновление батареи и автосмена страниц не будят его. Новое событие или Serial-навигация будят экран. Радио остаётся включено.
 
-## ✨ Main Functionality
+Мотор обслуживается по времени, без delay-паттернов: 300 мс (первый сигнал), 800 мс (новый эпизод длительного движения), 2×150 мс с паузой120 мс (батарея). Повторы эпизода не продлевают импульс; поклёвка может прервать батарейный паттерн, обратное запрещено. Между завершёнными паттернами минимум200 мс. I2C не обслуживается во время паттерна, чтобы сбой шины не задержал выключение мотора. Поэтому смена экрана во время уже идущей вибрации может задержаться до окончания паттерна (до800 мс).
 
-### 🧲 ESP-NOW Communication
+## Плата и подключения
 
-- Direct wireless communication with rod sensors
-- No router or access point required
-- Very low latency
-- Supports multiple rod sensors sending to one Hub
-- Receives alerts even when the OLED display is off
+Существующие назначения сохранены:
 
----
+| Сигнал | XIAO pin |
+|---|---|
+| OLED SDA / SCL | D4 / D5 |
+| Зелёный LED | D1 |
+| MOSFET мотора | D2 |
+| Делитель батареи 100k/100k | A0 |
 
-### 📟 OLED Display
+Выходы активны HIGH. Схема мотора/батареи и реальные сигнальные уровни требуют проверки на стенде; новые назначения не выдуманы. Радиоканал хаба — **1**, в соответствии с default softAP текущего датчика; физическая пара должна подтвердить совпадение каналов. Никакой точки доступа, роутера или сканирования сетей хаб не запускает.
 
-The Hub uses a **128×64 I2C OLED** display.
-In the current firmware the display is intended for **SH1106** modules and supports auto-detection of common I2C addresses.
+## Сборка и проверки
 
-#### Alert Screen
-When a packet is received, the Hub shows:
+Из корня репозитория:
 
-- **Rod name / rod ID** in large centered text
-- **Event label** in the header
-- **Hub battery icon**
-- **Progress bar** showing the alert display timeout
-
-#### Idle Screen
-When there is no active alert, the Hub shows:
-
-- `WAITING...`
-- Hub MAC address
-- Battery icon
-
-#### OLED Power Saving
-To save battery:
-
-- after **1 minute** of inactivity → display goes to **dim mode**
-- after **2 minutes** of inactivity → display turns **OFF**
-- on any new ESP-NOW alert → display wakes immediately
-
-> ESP-NOW remains active even when the display is off.
-
----
-
-### 🟢 Green Status LED
-
-A green LED is used as a simple “alive” indicator.
-
-Behavior:
-
-- **Normal mode / dim mode** → LED is **solid ON**
-- **Display OFF mode** → LED **blinks once every 10 seconds**
-
-This allows the user to confirm that the Hub is still powered and operating even when the OLED is off.
-
----
-
-### 📳 Vibration Motor Alert
-
-A miniature vibration motor is connected to the Hub and activated when an alert is received.
-
-Motor behavior depends on the event type:
-
-- **eventType = 1** → short vibration pulse
-- **eventType = 2** → longer vibration pulse
-- **eventType = 3** → double short pulse for low-battery warning from a rod
-
-The motor is driven through a **MOSFET transistor stage** and must **not** be connected directly to the ESP32 GPIO.
-
----
-
-### 🔋 Battery Monitoring (Hub)
-
-The Hub measures its own battery voltage using an ADC input and resistor divider.
-
-Current hardware concept:
-
-- single-cell **Li-Ion / 18650** battery
-- resistor divider: **100k / 100k**
-- ADC filtering capacitor recommended near the XIAO ADC input
-
-Battery information is shown on-screen using a **5-segment battery icon**.
-
----
-
-## 📡 Packet Format
-
-The Hub expects rod sensors to send the following structure:
-
-```cpp
-struct BitePacket {
-  char    rodName[16];
-  uint8_t eventType;     // 1 = BITE, 2 = RUN, 3 = LOW BAT
-  uint8_t batteryPct;    // rod battery percentage
-  float   deltaG;        // vibration intensity
-};
+```sh
+python3 ESP_HUB/tools/run_host_tests.py
+python3 ESP_HUB/tools/render_preview.py
+pio run -d ESP_HUB -e xiao_esp32c3 -e seeed_xiao_esp32s3
 ```
 
-### Field Description
+`render_preview.py` вызывает тот же `HubRender.h`, который выдаёт bitmap для SH1106. В `ESP_HUB/.pio/hub-preview/` появляются исходные128×64 PBM/PNG, копии4× без сглаживания и contact-sheet. Значения MAC/имён/батарей — тестовые. Это не фотография дисплея и не эмуляция ESP-NOW.
 
-#### `rodName`
-Human-readable rod or sensor name.
+В Serial115200 доступны команды `list`, `history`, `service`, `help`. Выбор действует30 с; затем возвращается автосмена. Входящие тревоги всегда имеют приоритет. При старте Serial также выводит действительный MAC хаба для настройки датчика.
 
-#### `eventType`
-Defines the meaning of the alert:
-
-- `1` = short bite / first trigger
-- `2` = continuous run / prolonged motion
-- `3` = low battery warning from rod sensor
-
-#### `batteryPct`
-Battery level of the rod sensor.
-
-#### `deltaG`
-Measured vibration level used for debugging and tuning.
-
----
-
-## ⚙️ Alert Handling Logic
-
-When the Hub receives an ESP-NOW packet:
-
-1. Packet is decoded
-2. OLED wakes if needed
-3. Rod name and event type are shown on screen
-4. Vibration motor pattern is triggered
-5. Alert stays visible for a few seconds
-6. Hub returns to idle screen
-
----
-
-## ⚡ Power Saving Strategy
-
-The Hub keeps **ESP-NOW active at all times**.
-It does **not** use deep sleep in normal operation, because deep sleep would stop ESP-NOW reception.
-
-Power saving is achieved by:
-
-- lowering CPU frequency
-- enabling Wi-Fi sleep where possible
-- dimming the OLED after inactivity
-- fully turning off the OLED after longer inactivity
-- using LED heartbeat indication instead of leaving the display on
-
-This allows the Hub to remain responsive while still reducing battery consumption.
-
----
-
-## 🔧 Hardware Summary
-
-### Main Parts
-
-- **Seeed Studio XIAO ESP32-S3**
-- **SH1106 OLED display, 128×64, I2C**
-- **Single-cell Li-Ion / 18650 battery**
-- **Green status LED**
-- **Mini vibration motor (7 mm type)**
-- **AO3400A MOSFET drivers** for LED and motor
-
-### Recommended Supporting Components
-
-- flyback diode across motor
-- bulk capacitor near motor supply
-- ceramic capacitor near motor supply
-- resistor divider for battery ADC
-- ADC filter capacitor near XIAO ADC input
-
----
-
-## 🧩 Driver Hardware Notes
-
-### Vibration Motor Driver
-
-Recommended implementation:
-
-- motor powered from battery rail
-- low-side MOSFET switching
-- flyback diode across motor
-- bulk + ceramic capacitor near motor
-
-### LED Driver
-
-- low-side MOSFET switching
-- current-limiting resistor for the LED
-
----
-
-## 🧪 Testing & Debugging
-
-Use the serial monitor to verify:
-
-- Hub MAC address
-- received rod name
-- event type
-- rod battery percentage
-- `deltaG` value
-
-Suggested test sequence:
-
-1. Power the Hub
-2. Confirm OLED shows idle screen
-3. Wait until OLED turns off and confirm green LED heartbeat
-4. Trigger a rod sensor
-5. Confirm OLED wakes instantly
-6. Confirm vibration motor activates
-7. Confirm correct rod name is shown
-
----
-
-## 📁 Project Structure
-
-```text
-hub/
-  src/main.cpp        # ESP-NOW Hub firmware
-  platformio.ini      # PlatformIO configuration
-  README.md           # Project documentation
-```
-
----
-
-## 🛠 Current Functional Summary
-
-The current ESP-HUB firmware supports:
-
-- ESP-NOW packet reception
-- OLED alert screen with rod name
-- idle screen with battery and MAC
-- battery monitoring
-- OLED dim mode after inactivity
-- OLED off mode after inactivity
-- green LED normal/alive indication
-- green LED heartbeat when display is off
-- vibration motor alert on incoming bite events
-- different motor patterns by event type
-
----
-
-## 🚀 Planned / Optional Future Improvements
-
-- button-based wake or menu handling
-- per-rod alert history
-- configurable motor patterns
-- sound buzzer output
-- wireless settings interface
-- battery warning for the Hub itself
-
----
-
-## 👤 Project
-
-Fishing Bite Sensor – ESP-NOW HUB
-Designed for portable fishing bite notification with local visual and vibration alerts.
+Платформа закреплена как `platformio/espressif32@8.0.0`, общие версии Adafruit GFX/SH110X/BusIO одинаковы для C3/S3. C6 оставлен как optional: его непригодность не доказана, физическая работа не заявляется. Протокол датчика и его конфигурация не менялись. Подробная аппаратная приёмка: [hub-testing.md](../docs/hub-testing.md).
