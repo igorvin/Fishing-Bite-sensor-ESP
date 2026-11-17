@@ -13,7 +13,7 @@ window.STATE =
   "skillDir": "/Users/macbook-air/.agents/skills/autopilot",
   "baseCommit": "3b08e96",
   "startedAt": "2026-11-14T22:51:11+02:00",
-  "updatedAt": "2026-11-17T08:44:07+02:00",
+  "updatedAt": "2026-11-17T19:48:04+02:00",
   "finishedAt": null,
   "stages": [
     {
@@ -50,7 +50,7 @@ window.STATE =
       "id": "build",
       "status": "done",
       "startedAt": "2026-11-17T08:02:21+02:00",
-      "finishedAt": "2026-11-17T08:26:20+02:00"
+      "finishedAt": "2026-11-17T08:42:20+02:00"
     },
     {
       "id": "review",
@@ -65,12 +65,12 @@ window.STATE =
     }
   ],
   "requirements": {
-    "total": 24,
+    "total": 27,
     "done": 20,
-    "inTicket": 0,
+    "inTicket": 2,
     "inSpec": 4,
     "placeholder": 0,
-    "deferred": 0,
+    "deferred": 1,
     "dropped": 0
   },
   "tickets": [
@@ -169,10 +169,10 @@ window.STATE =
       "review": "да — ремонт ветки",
       "model": "сильная",
       "status": "done",
-      "retries": 0,
-      "repairs": 0,
       "startedAt": "2026-11-17T08:30:29+02:00",
       "finishedAt": "2026-11-17T08:42:19+02:00",
+      "retries": 0,
+      "repairs": 0,
       "tests": {
         "passed": 55,
         "failed": 0
@@ -201,6 +201,26 @@ window.STATE =
         "failed": 0
       },
       "commit": "d24dc07"
+    },
+    {
+      "id": "HU02",
+      "title": "Минимальная индикация и регистрация",
+      "requirements": [
+        "G19",
+        "G21"
+      ],
+      "blockedBy": [
+        "HU01",
+        "F2"
+      ],
+      "wave": 3,
+      "zone": [],
+      "review": "нет",
+      "model": "сильная",
+      "status": "in-progress",
+      "retries": 0,
+      "repairs": 0,
+      "startedAt": "2026-11-17T19:46:34+02:00"
     }
   ],
   "tests": {
@@ -214,8 +234,8 @@ window.STATE =
   },
   "additions": [],
   "coverage": {
-    "found": 2,
-    "fixed": 2,
+    "found": 3,
+    "fixed": 3,
     "deferred": 0,
     "items": []
   },
@@ -254,9 +274,11 @@ window.STATE =
     "2026-11-17T08:42:19+02:00",
     "2026-11-17T08:42:20+02:00",
     "2026-11-17T08:44:06+02:00",
-    "2026-11-17T08:44:07+02:00"
+    "2026-11-17T08:44:07+02:00",
+    "2026-11-17T19:46:34+02:00",
+    "2026-11-17T19:48:04+02:00"
   ],
-  "rev": 66,
+  "rev": 70,
   "waiting": null,
   "waits": [
     {
@@ -699,6 +721,34 @@ window.STATE =
       "k": "add",
       "key": "report",
       "n": 1
+    },
+    {
+      "t": "2026-11-17T19:46:34+02:00",
+      "k": "tickets",
+      "n": 5
+    },
+    {
+      "t": "2026-11-17T19:46:34+02:00",
+      "k": "stage",
+      "id": "build",
+      "act": "start"
+    },
+    {
+      "t": "2026-11-17T19:46:34+02:00",
+      "k": "ticket",
+      "ids": [
+        "HU02"
+      ],
+      "act": "start"
+    },
+    {
+      "t": "2026-11-17T19:48:04+02:00",
+      "k": "gate",
+      "g": "G2",
+      "ok": true,
+      "found": 3,
+      "fixed": 3,
+      "deferred": 0
     }
   ],
   "reqList": [
@@ -821,14 +871,30 @@ window.STATE =
       "id": "G18",
       "text": "«сочетание»",
       "status": "done"
+    },
+    {
+      "id": "G19",
+      "text": "«высвечивалось количество ... Просто номер»; «дисплей ... выключался ... только во время поклёвки»",
+      "status": "in-ticket"
+    },
+    {
+      "id": "G20",
+      "text": "«сорок восемь часов»; «обоим»",
+      "status": "deferred",
+      "why": "Цельсохранена; измеренияотложены: «замеры ... оставим в покое»"
+    },
+    {
+      "id": "G21",
+      "text": "«продолжай править прошивку»; «загрузи ... на хаб»",
+      "status": "in-ticket"
     }
   ],
   "gates": {
     "G2": {
       "ok": true,
-      "at": "2026-11-17T08:01:45+02:00",
-      "found": 2,
-      "fixed": 2,
+      "at": "2026-11-17T19:48:04+02:00",
+      "found": 3,
+      "fixed": 3,
       "deferred": 0
     },
     "G4": {
