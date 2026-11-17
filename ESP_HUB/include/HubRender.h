@@ -56,34 +56,45 @@ inline const char* shortEvent(uint8_t type){return type==3?"БАТ":type==2?"Д�
 struct Diagnostics {bool radio=false,oled=false;uint32_t rx=0,invalid=0,dropped=0;char mac[18]{};float voltage=0;};
 inline Frame render(const Model& model,uint32_t now,int hubBattery,const Diagnostics& d={}){
  Frame f;View v=model.view(now);char buf[40];
- f.text(v.screen==Screen::Service?"СЕРВИС":"ХАБ",2,1,72);
- if(hubBattery>=0)std::snprintf(buf,sizeof(buf),"%d%%",hubBattery);else std::strcpy(buf,"--%");
- int batteryX=128-int(std::strlen(buf))*6-2;f.text(buf,batteryX,1,128-batteryX);f.fill(0,11,128,1);
+ // Preserve the original clear inverted HUB header and graphical battery.
+ f.fill(0,0,128,18);f.text("HUB",3,5,60,1,false);
+ f.fill(104,3,20,12,false);f.fill(106,5,16,8);f.fill(124,7,3,4,false);
+ if(hubBattery>=0){int bars=std::max(0,std::min(5,hubBattery*5/100));for(int i=0;i<bars;++i)f.fill(107+i*3,5,2,8,false);}
+ else f.text("?",111,5,6,1,false);
  if(v.screen==Screen::Alert){
   const Alert& a=model.alert();const Rod& r=model.rod(a.rod);
-  f.fill(0,15,128,10);f.text(a.type==3?"ЗАРЯД ДАТЧИКА":a.type==2?"ДВИЖЕНИЕ":"ПОКЛЁВКА",3,16,122,1,false);
-  std::snprintf(buf,sizeof(buf),"%02u",unsigned(a.rod+1));f.text(buf,3,29,38,3);
-  f.text(r.name,45,29,81);std::snprintf(buf,sizeof(buf),"ДАТЧИК %u%%",unsigned(r.battery));f.text(buf,45,41,81);
-  std::snprintf(buf,sizeof(buf),"%s",a.type==3?"НУЖНА ЗАРЯДКА":"СОБЫТИЕ ПОЛУЧЕНО");f.text(buf,2,54,124);
+  if(r.batteryKnown)std::snprintf(buf,sizeof(buf),"%02u %u%%",unsigned(a.rod+1),unsigned(r.battery));else std::snprintf(buf,sizeof(buf),"%02u --%%",unsigned(a.rod+1));f.text(buf,45,5,54,1,false);
+  f.text(a.type==3?"БАТАРЕЯ ДАТЧИКА":a.type==2?"ДВИЖЕНИЕ":"ПОКЛЁВКА",2,21,124);
+  // The active rod name occupies the main display, two rows if necessary.
+  size_t count=0;const char* ptr=r.name;size_t left=std::strlen(ptr);
+  while(left&&count<16){uint32_t cp;size_t n=utf8(ptr,left,cp);if(!n)break;++count;ptr+=n;left-=n;}
+  if(count<=10){int width=int(count)*12-2;f.text(r.name,std::max(2,(128-width)/2),34,124,2);}
+  else {char first[17]{},second[17]{};size_t cut=0,k=0;while(k<8&&cut<std::strlen(r.name)){uint32_t cp;size_t n=utf8(r.name+cut,std::strlen(r.name)-cut,cp);if(!n)break;cut+=n;++k;}
+   std::memcpy(first,r.name,cut);std::strcpy(second,r.name+cut);f.text(first,2,32,124,2);f.text(second,2,48,124,2);}
+  if(count<=10){std::snprintf(buf,sizeof(buf),"%02u  %s",unsigned(a.rod+1),r.batteryKnown?"":"БАТ ?");f.text(buf,2,55,124);}
   f.fill(0,63,int(model.alertRemaining(now)*128/AlertMs),1);
  }else if(v.screen==Screen::Service){
-  f.text(d.radio?"РАДИО: ПРИЁМ":"РАДИО: ОШИБКА",2,16,124);
-  f.text(d.mac[0]?d.mac:"MAC НЕИЗВЕСТЕН",2,28,124);
-  std::snprintf(buf,sizeof(buf),"RX %lu / BAD %lu",(unsigned long)d.rx,(unsigned long)d.invalid);f.text(buf,2,40,124);
-  std::snprintf(buf,sizeof(buf),"DROP %lu / REG %lu",(unsigned long)d.dropped,(unsigned long)model.registryDrops);f.text(buf,2,53,124);
+  f.text(d.radio?"РАДИО: ПРИЁМ":"РАДИО: ОШИБКА",2,21,124);
+  f.text(d.mac[0]?d.mac:"MAC НЕИЗВЕСТЕН",2,32,124);
+  std::snprintf(buf,sizeof(buf),"RX %lu / BAD %lu",(unsigned long)d.rx,(unsigned long)d.invalid);f.text(buf,2,43,124);
+  std::snprintf(buf,sizeof(buf),"DROP %lu / REG %lu",(unsigned long)d.dropped,(unsigned long)model.registryDrops);f.text(buf,2,54,124);
+ }else if(v.screen==Screen::Summary){
+  f.text(d.radio?"ГОТОВ К ПРИЁМУ":"РАДИО: ОШИБКА",2,23,124);
+  std::snprintf(buf,sizeof(buf),"УДИЛИЩ: %u",unsigned(model.rodCount()));f.text(buf,4,39,120,2);
+  f.text("УЧТЕНО С ЗАПУСКА",2,57,124);
  }else if(v.screen==Screen::List){
   const size_t pages=std::max<size_t>(1,(model.rodCount()+2)/3),page=v.page%pages;
-  std::snprintf(buf,sizeof(buf),"УДИЛИЩА %u/%u",unsigned(page+1),unsigned(pages));f.text(buf,2,16,124);
+  std::snprintf(buf,sizeof(buf),"УДИЛИЩА %u/%u",unsigned(page+1),unsigned(pages));f.text(buf,2,21,124);
   if(!model.rodCount()){f.text("ОЖИДАНИЕ",16,31,112,2);f.text("НЕТ СОБЫТИЙ",30,54,96);}
-  else for(size_t row=0;row<3;++row){size_t i=page*3+row;if(i>=model.rodCount())break;const Rod& r=model.rod(i);int y=29+int(row)*12;
+  else for(size_t row=0;row<3;++row){size_t i=page*3+row;if(i>=model.rodCount())break;const Rod& r=model.rod(i);int y=33+int(row)*12;
    std::snprintf(buf,sizeof(buf),"%02u",unsigned(i+1));f.text(buf,2,y,12);f.text(r.name,20,y,65);
    ageText(elapsed(now,r.lastAt),buf,sizeof(buf));f.text(buf,92,y,34);
   }
  }else{
   const size_t pages=std::max<size_t>(1,(model.historyCount()+2)/3),page=v.page%pages;
-  std::snprintf(buf,sizeof(buf),"ЖУРНАЛ %u/%u",unsigned(page+1),unsigned(pages));f.text(buf,2,16,124);
+  std::snprintf(buf,sizeof(buf),"ЖУРНАЛ %u/%u",unsigned(page+1),unsigned(pages));f.text(buf,2,21,124);
   if(!model.historyCount())f.text("НЕТ СОБЫТИЙ",30,38,96);
-  else for(size_t row=0;row<3;++row){size_t i=page*3+row;if(i>=model.historyCount())break;const Entry& e=model.history(i);int y=29+int(row)*12;
+  else for(size_t row=0;row<3;++row){size_t i=page*3+row;if(i>=model.historyCount())break;const Entry& e=model.history(i);int y=33+int(row)*12;
    std::snprintf(buf,sizeof(buf),"%02u",unsigned(e.rod+1));f.text(buf,2,y,12);f.text(shortEvent(e.type),21,y,44);
    ageText(elapsed(now,e.lastAt),buf,sizeof(buf));f.text(buf,92,y,34);
   }

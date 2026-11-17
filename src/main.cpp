@@ -18,6 +18,7 @@
 #include "ConfigDatabase.h"
 #include "ImuSession.h"
 #include "MobileUi.h"
+#include "../shared/StartupRadio.h"
 
 // Keep original key hashes and 22-byte wire contract. New semantics use new keys.
 DB_KEYS(kk,name,deltaG,shortPulse,pulsePeriod,contThresh,armedSw,langIdx,testAlarm,apPass,saveRB,buzVol,ledRedLvl,ledGreenLvl,espNowEn,hubMac);
@@ -44,6 +45,9 @@ String sensorName="BiteSensor",apPassword="",hubAddress="";
 String draftName,draftPass,draftMac,notice="",sleepNotice="",radioNotice="";
 bool draftRadio=false;
 uint8_t peerMac[6]={0};
+startup::Sensor registration;uint32_t sensorBoot=1;
+startup::Ring<startup::Message,4> controlInbox;portMUX_TYPE controlMux=portMUX_INITIALIZER_UNLOCKED;
+uint32_t controlTx=0,controlRx=0;char serialCommand[48]{};size_t serialLength=0;bool serialOverflow=false;
 uint32_t lastBattery=0,lastRate=0,rateSamples=0;
 uint32_t pulseCount=0,readErrors=0,noNew=0,csvDrops=0,sendErrors=0,saveNonce=0;
 uint32_t rebootAt=0,shutdownAt=0;
@@ -82,21 +86,25 @@ void onSent(const wifi_tx_info_t*,esp_now_send_status_t s){if(s==ESP_NOW_SEND_SU
 #else
 void onSent(const uint8_t*,esp_now_send_status_t s){if(s==ESP_NOW_SEND_SUCCESS)txSuccess.fetch_add(1,std::memory_order_relaxed);else txFail.fetch_add(1,std::memory_order_relaxed);}
 #endif
-void radioEnd(){if(radioReady)esp_now_deinit();radioReady=false;}
+void onControl(const esp_now_recv_info* info,const uint8_t* data,int len){
+ startup::Message message;if(!info||len<0||!startup::decode(data,size_t(len),info->src_addr,message.packet))return;
+ std::memcpy(message.mac.data(),info->src_addr,6);portENTER_CRITICAL(&controlMux);controlInbox.push(message);portEXIT_CRITICAL(&controlMux);
+}
+void radioEnd(){if(radioReady)esp_now_deinit();radioReady=false;registration.disable();portENTER_CRITICAL(&controlMux);controlInbox.clear();portEXIT_CRITICAL(&controlMux);}
 bool reconcileRadio(){
     radioEnd();radioNotice="OFF";
     if(!radioEn)return true;
     uint8_t candidate[6];if(!bite::parseMac(hubAddress.c_str(),candidate)){radioNotice="invalid MAC";return false;}
     if(WiFi.getMode()==WIFI_OFF)WiFi.mode(WIFI_STA);
     if(esp_now_init()!=ESP_OK){radioNotice="init failed";return false;}
-    if(esp_now_register_send_cb(onSent)!=ESP_OK){esp_now_deinit();radioNotice="callback failed";return false;}
+    if(esp_now_register_send_cb(onSent)!=ESP_OK||esp_now_register_recv_cb(onControl)!=ESP_OK){esp_now_deinit();radioNotice="callback failed";return false;}
     esp_now_peer_info_t p{};memcpy(p.peer_addr,candidate,6);p.channel=0;p.encrypt=false;p.ifidx=WIFI_IF_STA;
     if(esp_now_add_peer(&p)!=ESP_OK){esp_now_deinit();radioNotice="peer failed";return false;}
-    memcpy(peerMac,candidate,6);radioReady=true;radioNotice="ready (MAC delivery only)";return true;
+    memcpy(peerMac,candidate,6);registration.begin(peerMac,sensorBoot);radioReady=true;radioNotice="ready (MAC delivery only)";return true;
 }
 bool sendPacket(uint8_t type){
     if(!radioReady)return false;
-    BitePacket packet{};strlcpy(packet.rodName,sensorName.c_str(),sizeof(packet.rodName));
+    BitePacket packet{};startup::copyName(packet.rodName,sensorName.c_str());
     packet.eventType=type;packet.batteryPct=uint8_t(constrain(batteryPct,0,100));
     packet.deltaG=sensor.config().legacyMode?sensor.telemetry().signal.legacy:sensor.telemetry().signal.dynamic;
     esp_err_t result=esp_now_send(peerMac,reinterpret_cast<uint8_t*>(&packet),sizeof(packet));
@@ -126,6 +134,40 @@ bool flushSettings(){
     if(!storageOK)return false;
     // Force a dirty marker so false from update is a genuine write failure.
     db.set("benchSave",++saveNonce);return db.update();
+}
+void serviceRegistration(uint32_t now){
+ startup::Message message;
+ for(unsigned i=0;i<4;++i){portENTER_CRITICAL(&controlMux);bool present=controlInbox.pop(message);portEXIT_CRITICAL(&controlMux);if(!present)break;
+  if(registration.receive(message.mac.data(),message.packet)){++controlRx;if(registration.confirmed()){radioNotice="registered at startup (not live link)";Serial.printf("SENSOR registration confirmed node=%u\n",registration.node());}}
+ }
+ if(radioReady&&registration.due(now)){
+  auto packet=registration.announce(now,sensorName.c_str(),startup::batteryKnown(vbat),uint8_t(constrain(batteryPct,0,100)));
+  if(esp_now_send(peerMac,reinterpret_cast<const uint8_t*>(&packet),sizeof(packet))==ESP_OK)++controlTx;else ++sendErrors;
+ }
+}
+void serviceSerial(){
+ unsigned consumed=0;while(Serial.available()&&consumed++<64){char ch=char(Serial.read());
+  if(ch=='\r'||ch=='\n'){
+   serialCommand[serialLength]=0;
+   if(serialOverflow)Serial.println("SENSOR error: command too long");
+   else if(!std::strcmp(serialCommand,"status"))Serial.printf("SENSOR status radio=%u registered=%u attempts=%u node=%u control_rx=%lu control_tx=%lu state=%s imu=%u\n",radioReady,registration.confirmed(),registration.attempts(),registration.node(),(unsigned long)controlRx,(unsigned long)controlTx,bite::stateName(sensor.state()),sensor.healthy());
+   else if(!std::strcmp(serialCommand,"register")){
+    if(sensor.desiredArmed())Serial.println("SENSOR error: disarm before register");
+    else if(!radioReady)Serial.println("SENSOR error: radio disabled");
+    else {sensorBoot=esp_random();if(!sensorBoot)sensorBoot=1;registration.begin(peerMac,sensorBoot);Serial.println("SENSOR diagnostic registration requested; no bite event");}
+   }else if(!std::strncmp(serialCommand,"peer ",5)){
+    uint8_t candidate[6];
+    if(sensor.desiredArmed())Serial.println("SENSOR error: disarm before peer setup");
+    else if(!storageOK||!bite::parseMac(serialCommand+5,candidate))Serial.println("SENSOR error: invalid peer or storage unavailable");
+    else {
+     db.set(kk::hubMac,String(serialCommand+5));db.set(kk::espNowEn,true);
+     if(flushSettings()){hubAddress=serialCommand+5;radioEn=true;draftMac=hubAddress;draftRadio=true;reconcileRadio();Serial.println("SENSOR peer saved; radio enabled");}
+     else {db.set(kk::hubMac,hubAddress);db.set(kk::espNowEn,radioEn);Serial.println("SENSOR error: peer save failed; live configuration unchanged");}
+    }
+   }else if(serialLength)Serial.println("SENSOR commands: status, register, peer AA:BB:CC:DD:EE:FF (disarmed only)");
+   serialLength=0;serialOverflow=false;
+  }else if(serialLength+1<sizeof(serialCommand))serialCommand[serialLength++]=ch;else serialOverflow=true;
+ }
 }
 void persistConfig(){
     mode=mode==1?1:0;language=language==1?1:0;draft.legacyMode=mode==1;
@@ -232,7 +274,7 @@ void update(sets::Updater& u){
     u.update(ui::stats,String(t.events)+" / "+String(pulseCount)+" / "+String(t.suppressedMs));
     u.update(ui::timing,String(sampleRate,1)+" Hz / "+String(t.gaps)+" / "+String(readErrors)+"; CSV dropped="+String(csvDrops));
     u.update(ui::sleep,sleepNotice);
-    u.update(ui::radioInfo,!radioEn?tr("Off","Выключен"):radioReady?tr("Ready; hub unconfirmed","Готов; хаб не подтверждён"):tr("Error — see details","Ошибка — см. подробности"));
+    u.update(ui::radioInfo,!radioEn?tr("Off","Выключен"):radioReady?(registration.confirmed()?tr("Registered at startup","Регистрация при старте подтверждена"):tr("Ready; hub unconfirmed","Готов; хаб не подтверждён")):tr("Error — see details","Ошибка — см. подробности"));
     u.update(ui::radioDetails,radioNotice+" TX="+String(txSuccess.load(std::memory_order_relaxed))+" fail="+String(txFail.load(std::memory_order_relaxed)+sendErrors));u.update(ui::message,notice);
 }
 
@@ -282,7 +324,7 @@ bool mountStorage(){
 void setup(){
     pinMode(board::power,OUTPUT);digitalWrite(board::power,HIGH);pinMode(board::powerButton,INPUT_PULLUP);
     pinMode(board::button,INPUT_PULLUP);button.setHoldTimeout(1000);pinMode(board::battery,INPUT);
-    Serial.begin(115200);setCpuFrequencyMhz(80);initOutputs();
+    Serial.begin(115200);sensorBoot=esp_random();if(!sensorBoot)sensorBoot=1;setCpuFrequencyMhz(80);initOutputs();
     analogReadResolution(12);analogSetPinAttenuation(board::battery,ADC_11db);
     storageOK=mountStorage();if(storageOK)storageOK=db.begin();
     if(!storageOK)notice="Storage error; RAM settings only (not formatting existing data)";
@@ -300,6 +342,7 @@ void setup(){
 void loop(){
     esp_task_wdt_reset();sett.tick();uint32_t now=millis();
     button.tick();if(button.hold())setArmed(!sensor.desiredArmed(),now);
+    serviceSerial();serviceRegistration(now);
     handlePower(now);if(shutdownPending){stopOutputs();applyOutputs(now);return;}
     if(saveConfig){saveConfig=false;persistConfig();}
     if(networkRequest){networkRequest=false;uint8_t parsed[6];draftName.trim();
@@ -336,7 +379,7 @@ void loop(){
     static uint32_t lastLowAttempt=0;static bool lowSeen=false;
     if(bite::elapsed(now,lastBattery)>=5000){lastBattery=now;updateBattery();
         if(batteryPct>25)lowSeen=false;
-        if(sensor.desiredArmed()&&batteryPct<=20&&(!lowSeen||bite::elapsed(now,lastLowAttempt)>=60000)){lastLowAttempt=now;lowSeen=sendPacket(3);}}
+        if(startup::batteryKnown(vbat)&&sensor.desiredArmed()&&batteryPct<=20&&(!lowSeen||bite::elapsed(now,lastLowAttempt)>=60000)){lastLowAttempt=now;lowSeen=sendPacket(3);}}
     if(state==bite::State::Fault||state==bite::State::Calibrating||state==bite::State::MotionSuppressed||state==bite::State::Settling)alarmPulse.stop();
     auto calibration=sensor.calibration();
     if(calibration==bite::Calibration::Success&&previousCalibration!=calibration){

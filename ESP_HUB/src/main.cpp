@@ -16,7 +16,9 @@ constexpr uint8_t RadioChannel=1; // Existing sensor softAP defaults to channel 
 hub::DriverSession<Adafruit_SH1106G> oled;
 hub::Model model;
 hub::Motor motor;
-hub::Ring<hub::Event,hub::RxDepth> inbox;
+struct Incoming {bool control=false;hub::Event event{};startup::Message message{};};
+hub::Ring<Incoming,hub::RxDepth> inbox;
+startup::Discovery discovery;bool discoveryStarted=false;uint32_t controlReceived=0,controlSent=0;
 portMUX_TYPE inboxMux=portMUX_INITIALIZER_UNLOCKED;
 uint32_t received=0,invalid=0,dropped=0;
 bool radioReady=false,oledReady=false,frameValid=false,powerKnown=false;
@@ -31,14 +33,21 @@ char hubMac[18]{};
 char command[40]{};size_t commandLength=0;
 
 void onReceive(const esp_now_recv_info* info,const uint8_t* data,int len){
- hub::Event event;
- bool valid=info&&len>=0&&hub::decode(data,size_t(len),info->src_addr,millis(),event);
+ Incoming incoming;bool valid=false;
+ if(info&&len>=0){incoming.control=size_t(len)==sizeof(startup::Packet);
+  if(incoming.control){valid=startup::decode(data,size_t(len),info->src_addr,incoming.message.packet);std::memcpy(incoming.message.mac.data(),info->src_addr,6);}
+  else valid=hub::decode(data,size_t(len),info->src_addr,millis(),incoming.event);
+ }
  portENTER_CRITICAL(&inboxMux);
- if(!valid)++invalid;
- else {++received;if(!inbox.push(event))++dropped;}
+ if(!valid)++invalid;else{++received;if(!inbox.push(incoming))++dropped;}
  portEXIT_CRITICAL(&inboxMux);
 }
-bool popEvent(hub::Event& event){portENTER_CRITICAL(&inboxMux);bool ok=inbox.pop(event);portEXIT_CRITICAL(&inboxMux);return ok;}
+bool popEvent(Incoming& event){portENTER_CRITICAL(&inboxMux);bool ok=inbox.pop(event);portEXIT_CRITICAL(&inboxMux);return ok;}
+bool sendControl(const uint8_t* mac,const startup::Packet& packet){
+ if(!radioReady)return false;
+ if(!esp_now_is_peer_exist(mac)){esp_now_peer_info_t peer{};std::memcpy(peer.peer_addr,mac,6);peer.channel=RadioChannel;peer.ifidx=WIFI_IF_STA;if(esp_now_add_peer(&peer)!=ESP_OK)return false;}
+ if(esp_now_send(mac,reinterpret_cast<const uint8_t*>(&packet),sizeof(packet))!=ESP_OK)return false;++controlSent;return true;
+}
 void beginRadio(uint32_t now){
  if(radioReady||(radioAttempted&&hub::elapsed(now,radioAttemptAt)<2000))return;
  radioAttempted=true;radioAttemptAt=now;
@@ -47,12 +56,13 @@ void beginRadio(uint32_t now){
  if(esp_now_init()!=ESP_OK)return;
  if(esp_now_register_recv_cb(onReceive)!=ESP_OK){esp_now_deinit();return;}
  radioReady=true;
+ if(!discoveryStarted){discovery.begin(esp_random(),now);discoveryStarted=true;}
  String mac=WiFi.macAddress();mac.toCharArray(hubMac,sizeof(hubMac));
  Serial.print("Hub MAC: ");Serial.println(hubMac);
 }
 bool probe(uint8_t address){Wire.beginTransmission(address);return Wire.endTransmission()==0;}
 void beginOled(uint32_t now){
- if(oledReady||(oledAttempted&&hub::elapsed(now,oledAttemptAt)<2000))return;
+ if(oledReady||(oledAttempted&&hub::elapsed(now,oledAttemptAt)<10000))return;
  oledAttempted=true;oledAttemptAt=now;
  oledAddress=probe(0x3c)?0x3c:probe(0x3d)?0x3d:0;
  if(!oledAddress||!oled.begin(
@@ -67,14 +77,22 @@ void readBattery(){
  // this does not prove a battery is attached or establish remaining runtime.
  hubVoltage=float(sum)/16.f*.002f;hubBattery=hub::batteryPercent(hubVoltage);
 }
-void printHelp(){Serial.println("Commands: list, history, service, help. Pages advance automatically; no buttons required.");}
+void printHelp(){Serial.println("Commands: summary, list, history, service, status, help. Startup screen lasts 8 s; no buttons required.");}
 void serialCommands(uint32_t now){
  unsigned consumed=0;
  while(Serial.available()&&consumed++<48){char c=char(Serial.read());
   if(c=='\r'||c=='\n'){
    command[commandLength]=0;
-   if(!std::strcmp(command,"list"))model.select(hub::Screen::List,0,now);
-   else if(!std::strcmp(command,"history"))model.select(hub::Screen::History,0,now);
+   if(!std::strcmp(command,"summary"))model.select(hub::Screen::Summary,0,now);
+   else if(!std::strcmp(command,"status")){Serial.printf("HUB status radio=%u oled=%u rods=%u history=%u control_rx=%lu control_tx=%lu screen=%s\n",radioReady,oledReady,unsigned(model.rodCount()),unsigned(model.historyCount()),(unsigned long)controlReceived,(unsigned long)controlSent,model.power(now)==hub::Power::Off?"OFF":"ON");}
+   else if(!std::strcmp(command,"list")||!std::strncmp(command,"list ",5)){
+    char* end=nullptr;unsigned long page=command[4]?std::strtoul(command+5,&end,10):1;
+    if(page&&page<=std::max<size_t>(1,(model.rodCount()+2)/3)&&(!end||!*end))model.select(hub::Screen::List,page-1,now);else Serial.println("HUB error: invalid list page");
+   }
+   else if(!std::strcmp(command,"history")||!std::strncmp(command,"history ",8)){
+    char* end=nullptr;unsigned long page=command[7]?std::strtoul(command+8,&end,10):1;
+    if(page&&page<=std::max<size_t>(1,(model.historyCount()+2)/3)&&(!end||!*end))model.select(hub::Screen::History,page-1,now);else Serial.println("HUB error: invalid history page");
+   }
    else if(!std::strcmp(command,"service"))model.select(hub::Screen::Service,0,now);
    else if(commandLength)printHelp();
    commandLength=0;
@@ -117,10 +135,16 @@ void loop(){
  bool motorOn=motor.tick(now);digitalWrite(MotorPin,motorOn?HIGH:LOW);
  model.tick(now);
  // Drain a bounded burst and choose one highest-priority motor request.
- uint8_t motorRequest=0;
- for(size_t i=0;i<hub::RxDepth;++i){hub::Event event;if(!popEvent(event))break;
-  hub::Ingest result=model.ingest(event,now);
-  if(result.newEpisode)frameValid=false;
+ uint8_t motorRequest=0;bool batteryRequested=false;
+ for(size_t i=0;i<hub::RxDepth;++i){Incoming incoming;if(!popEvent(incoming))break;
+  if(incoming.control){const auto& message=incoming.message;
+   if(discovery.accepts(message.packet)){
+    int id=model.registerRod(message.mac.data(),message.packet.name,message.packet.flags&startup::BatteryValid,message.packet.battery,now);
+    if(id>=0){++controlReceived;sendControl(message.mac.data(),discovery.ack(message.packet,uint8_t(id+1)));frameValid=false;Serial.printf("HUB registration node=%u count=%u\n",unsigned(id+1),unsigned(model.rodCount()));}
+   }continue;
+  }
+  hub::Ingest result=model.ingest(incoming.event,now);
+  if(result.newEpisode){frameValid=false;batteryRequested=true;}
   if(result.motor&&(!motorRequest||(motorRequest==3&&result.type!=3)))motorRequest=result.type;
  }
  motorOn=motor.tick(millis());digitalWrite(MotorPin,motorOn?HIGH:LOW);
@@ -129,7 +153,8 @@ void loop(){
  // Otherwise a failed bus could delay switching the motor off.
  if(!motor.busy()){
   beginRadio(now);beginOled(now);
-  if(hub::elapsed(now,lastBatteryAt)>=5000){readBattery();lastBatteryAt=now;}
+  if(batteryRequested||(model.power(now)!=hub::Power::Off&&hub::elapsed(now,lastBatteryAt)>=5000)){readBattery();lastBatteryAt=now;}
+  if(discovery.due(now)){const uint8_t broadcast[6]={255,255,255,255,255,255};sendControl(broadcast,discovery.take());}
   updateOled(now);
  }
  // Paint a newly awakened alert before energising the motor. No I2C transfer
@@ -137,6 +162,6 @@ void loop(){
  if(motorRequest)motor.start(motorRequest,millis());
  digitalWrite(MotorPin,motor.tick(millis())?HIGH:LOW);
  bool sleeping=model.power(now)==hub::Power::Off;
- digitalWrite(LedPin,!sleeping||(now%10000)<80?HIGH:LOW);
+ digitalWrite(LedPin,!sleeping?HIGH:LOW);
  delay(1);
 }

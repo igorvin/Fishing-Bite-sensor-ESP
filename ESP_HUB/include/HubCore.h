@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <algorithm>
+#include "../../shared/StartupRadio.h"
 
 namespace hub {
 constexpr size_t MaxRods=8, HistorySize=12, RxDepth=24;
@@ -48,12 +49,12 @@ template<typename T,size_t N> class Ring {
  bool pop(T& t){if(!count_)return false;t=a_[head_];head_=(head_+1)%N;--count_;return true;}
  size_t size()const{return count_;}
 };
-struct Rod {bool used=false;std::array<uint8_t,6> mac{};char name[17]{};uint8_t battery=0,type=0;float delta=0;uint32_t lastAt=0,motionAt=0,lowAt=0;bool motionSeen=false,lowSeen=false;uint32_t episode=0;};
+struct Rod {bool used=false,batteryKnown=true;std::array<uint8_t,6> mac{};char name[17]{};uint8_t battery=0,type=0;float delta=0;uint32_t lastAt=0,motionAt=0,lowAt=0;bool motionSeen=false,lowSeen=false;uint32_t episode=0;};
 struct Entry {uint32_t episode=0;uint8_t rod=0,type=0,battery=0;uint32_t at=0,lastAt=0;float peak=0;};
 struct Alert {bool valid=false;uint8_t rod=0,type=0,battery=0;uint32_t at=0;};
-enum class Screen {List,History,Service,Alert};
+enum class Screen {Summary,List,History,Service,Alert};
 enum class Power {On,Dim,Off};
-struct View {Screen screen=Screen::List;size_t page=0;};
+struct View {Screen screen=Screen::Summary;size_t page=0;};
 struct Ingest {bool accepted=false,newEpisode=false,motor=false;uint8_t type=0;};
 class Model {
  std::array<Rod,MaxRods> rods_{};std::array<Entry,HistorySize> history_{};size_t count_=0,hcount_=0,hhead_=0;
@@ -78,6 +79,11 @@ class Model {
  public:
  uint32_t registryDrops=0,historyOverwrites=0;
  void begin(uint32_t now){activity_=navAt_=now;}
+ int registerRod(const uint8_t* mac,const char name[16],bool batteryValid,uint8_t battery,uint32_t now){
+  size_t id=0;for(;id<count_;++id)if(!std::memcmp(rods_[id].mac.data(),mac,6))break;
+  if(id==count_){if(count_==MaxRods){++registryDrops;return -1;}rods_[id].used=true;std::memcpy(rods_[id].mac.data(),mac,6);++count_;}
+  cleanName(name,rods_[id].name);rods_[id].battery=battery;rods_[id].batteryKnown=batteryValid;rods_[id].lastAt=now;return int(id);
+ }
  Ingest ingest(const Event& e,uint32_t now){
   size_t id=0;for(;id<count_;++id)if(rods_[id].mac==e.mac)break;
   if(id==count_){if(count_==MaxRods){++registryDrops;return {};}
@@ -88,8 +94,8 @@ class Model {
   bool repeatedLow=e.type==3&&r.lowSeen&&elapsed(e.at,r.lowAt)<60000;
   bool fresh=!(continuation||repeatedLow);
   if(e.type!=3){r.motionSeen=true;r.motionAt=e.at;}else{r.lowSeen=true;r.lowAt=e.at;}
-  activity_=now;
   if(fresh){
+   activity_=now;
    Entry x{++seq_,uint8_t(id),e.type,e.battery,e.at,e.at,e.delta};if(e.type!=3)r.episode=x.episode;
    history_[hhead_]=x;hhead_=(hhead_+1)%HistorySize;if(hcount_<HistorySize)++hcount_;else ++historyOverwrites;
    queue(uint8_t(id),e.type,e.battery,now);
@@ -100,15 +106,14 @@ class Model {
   }
   return {true,fresh,fresh,e.type};
  }
- void tick(uint32_t now){if(current_.valid&&elapsed(now,shownAt_)>=AlertMs){current_={};next(now);}if(manual_&&elapsed(now,manualAt_)>=30000){manual_=false;navAt_=now;}}
+ void tick(uint32_t now){if(current_.valid&&elapsed(now,shownAt_)>=AlertMs){current_={};next(now);if(!current_.valid)activity_=now-8000u;}if(manual_&&elapsed(now,manualAt_)>=30000){manual_=false;navAt_=now;}}
  void select(Screen s,size_t page,uint32_t now){manual_=true;manualScreen_=s;manualPage_=page;manualAt_=activity_=now;}
- View view(uint32_t now)const{
+ View view(uint32_t)const{
   if(current_.valid)return {Screen::Alert,0};
   if(manual_)return {manualScreen_,manualPage_};
-  const size_t lp=std::max<size_t>(1,(count_+2)/3),hp=(hcount_+2)/3;
-  size_t page=(elapsed(now,navAt_)/PageMs)%(lp+hp);return page<lp?View{Screen::List,page}:View{Screen::History,page-lp};
+  return {Screen::Summary,0};
  }
- Power power(uint32_t now)const{uint32_t age=elapsed(now,activity_);return age>=120000?Power::Off:age>=60000?Power::Dim:Power::On;}
+ Power power(uint32_t now)const{if(current_.valid||manual_)return Power::On;return elapsed(now,activity_)<8000?Power::On:Power::Off;}
  size_t rodCount()const{return count_;}const Rod& rod(size_t id)const{return rods_[id];}
  size_t historyCount()const{return hcount_;}const Entry& history(size_t newest)const{return history_[(hhead_+HistorySize-1-newest)%HistorySize];}
  const Alert& alert()const{return current_;}uint32_t alertRemaining(uint32_t now)const{return !current_.valid?0:AlertMs-std::min(AlertMs,elapsed(now,shownAt_));}

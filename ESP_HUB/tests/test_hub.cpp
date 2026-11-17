@@ -90,18 +90,19 @@ int main(){
  TEST("bounded-journal-overwrites-oldest",{
   Model m;m.begin(0);for(int i=0;i<15;++i)m.ingest(event(1,1,uint32_t(10+i*10)),uint32_t(10+i*10));CHECK(m.historyCount()==12&&m.historyOverwrites==3);CHECK(m.history(0).at==150&&m.history(11).at==40);
  });
+ TEST("minimal-boot-screen-off-without-auto-wake",{ Model m;m.begin(0);CHECK(m.power(7999)==Power::On);CHECK(m.power(8000)==Power::Off); });
  TEST("power-off-not-reset-by-auto-pages",{
-  Model m;m.begin(100);CHECK(m.power(60099)==Power::On);CHECK(m.power(60100)==Power::Dim);for(uint32_t t=100;t<=120100;t+=1000){m.tick(t);m.view(t);}CHECK(m.power(120100)==Power::Off);m.ingest(event(1,1,120101),120101);CHECK(m.power(120101)==Power::On);
+  Model m;m.begin(100);CHECK(m.power(8099)==Power::On);CHECK(m.power(8100)==Power::Off);for(uint32_t t=100;t<=120100;t+=1000){m.tick(t);m.view(t);}CHECK(m.power(120100)==Power::Off);m.ingest(event(1,1,120101),120101);CHECK(m.power(120101)==Power::On);
  });
  TEST("rollover-alert-and-power",{
   Model m;uint32_t start=0xfffffff0u;m.begin(start);m.ingest(event(1,1,start),start);m.tick(start+3500u);CHECK(!m.alert().valid);CHECK(m.power(start+120000u)==Power::Off);
  });
  TEST("manual-navigation-expires-and-alert-wins",{
-  Model m;m.begin(0);m.select(Screen::Service,0,100);CHECK(m.view(101).screen==Screen::Service);m.ingest(event(1,1,200),200);CHECK(m.view(201).screen==Screen::Alert);m.tick(3700);CHECK(m.view(3700).screen==Screen::Service);m.tick(30100);CHECK(m.view(30100).screen==Screen::List);
+  Model m;m.begin(0);m.select(Screen::Service,0,100);CHECK(m.view(101).screen==Screen::Service);m.ingest(event(1,1,200),200);CHECK(m.view(201).screen==Screen::Alert);m.tick(3700);CHECK(m.view(3700).screen==Screen::Service);m.tick(30100);CHECK(m.view(30100).screen==Screen::Summary);
  });
  TEST("buttonless-list-and-history-pagination",{
   Model m;m.begin(0);for(int i=1;i<=4;++i)m.ingest(event(uint8_t(i),1,uint32_t(i)),uint32_t(i));for(uint32_t t=4000;t<20000;t+=4000)m.tick(t);
-  CHECK(m.view(24000).screen==Screen::History);CHECK(m.view(24000).page==1);CHECK(m.view(32000).screen==Screen::List);
+  CHECK(m.view(24000).screen==Screen::Summary);CHECK(m.power(24000)==Power::Off);m.select(Screen::List,1,24001);CHECK(m.view(24002).screen==Screen::List&&m.view(24002).page==1);
  });
  TEST("motor-patterns-are-bounded-and-no-retrigger",{
   Motor m;CHECK(m.start(2,100));CHECK(!m.start(2,200));CHECK(m.tick(899));CHECK(!m.tick(900));CHECK(!m.start(1,901));CHECK(m.start(3,1100));CHECK(m.tick(1249));CHECK(!m.tick(1250));CHECK(m.busy());CHECK(m.tick(1370));CHECK(!m.tick(1520));CHECK(!m.busy());
@@ -122,6 +123,46 @@ int main(){
  });
  TEST("renderer-respects-text-region",{
   Frame f;f.text("ДЛИННОЕ ИМЯ С Ё",10,10,35,1);const Frame& cf=f;for(int y=0;y<64;++y)for(int x=0;x<128;++x)if(cf.pixel(x,y))CHECK(x>=10&&x<45&&y>=10&&y<17);
+ });
+ TEST("continuations-do-not-rewake-expired-alert",{ Model m;m.begin(0);m.ingest(event(1,1,100),100);for(uint32_t t=300;t<8000;t+=200){m.tick(t);auto r=m.ingest(event(1,2,t),t);CHECK(!r.newEpisode);if(t>=3700)CHECK(m.power(t)==Power::Off);} });
+ TEST("registration-does-not-create-motion-or-wake",{
+  Model m;m.begin(0);uint8_t mac[6]={2,0,0,0,0,1};char name[16]="Rod";
+  CHECK(m.registerRod(mac,name,false,0,9000)==0);CHECK(m.rodCount()==1&&m.historyCount()==0&&!m.alert().valid);CHECK(m.power(9000)==Power::Off);CHECK(!m.rod(0).batteryKnown);
+  CHECK(m.registerRod(mac,name,true,70,10000)==0);CHECK(m.rodCount()==1&&m.rod(0).battery==70);
+ });
+ TEST("startup-control-strict-wire-validation",{
+  uint8_t mac[6]={2,0,0,0,0,1};startup::Packet p,out;p.hubSession=10;
+  CHECK(startup::decode(reinterpret_cast<uint8_t*>(&p),sizeof(p),mac,out));
+  CHECK(!startup::decode(reinterpret_cast<uint8_t*>(&p),sizeof(p)-1,mac,out));
+  p.version=2;CHECK(!startup::decode(reinterpret_cast<uint8_t*>(&p),sizeof(p),mac,out));p.version=1;
+  p.flags=8;CHECK(!startup::decode(reinterpret_cast<uint8_t*>(&p),sizeof(p),mac,out));p.flags=0;
+  p.kind=startup::Kind::Announce;p.sensorSession=20;p.hubSession=0;startup::copyName(p.name,"Ёжик");CHECK(startup::decode(reinterpret_cast<uint8_t*>(&p),sizeof(p),mac,out));
+  p.name[0]=char(0xc0);CHECK(!startup::decode(reinterpret_cast<uint8_t*>(&p),sizeof(p),mac,out));std::memset(p.name,0,16);
+  p.flags=startup::BatteryValid;p.battery=101;CHECK(!startup::decode(reinterpret_cast<uint8_t*>(&p),sizeof(p),mac,out));p.battery=40;CHECK(startup::decode(reinterpret_cast<uint8_t*>(&p),sizeof(p),mac,out));
+  p={};p.kind=startup::Kind::Ack;p.sensorSession=20;p.hubSession=10;p.node=9;CHECK(!startup::decode(reinterpret_cast<uint8_t*>(&p),sizeof(p),mac,out));p.node=1;CHECK(startup::decode(reinterpret_cast<uint8_t*>(&p),sizeof(p),mac,out));
+ });
+ TEST("startup-retries-exhaust-without-background-traffic",{
+  uint8_t mac[6]={2,0,0,0,0,1};startup::Sensor s;s.begin(mac,20);
+  CHECK(s.due(0));s.announce(0,"Rod",false,0);CHECK(!s.due(699));CHECK(s.due(700));s.announce(700,"Rod",false,0);s.announce(1400,"Rod",false,0);
+  CHECK(!s.due(2100)&&!s.due(3600000)&&s.attempts()==3);
+  startup::Packet d;d.hubSession=10;CHECK(s.receive(mac,d));CHECK(s.due(2101));s.announce(2101,"Rod",true,64);CHECK(!s.receive(mac,d));CHECK(!s.due(2102));
+ });
+ TEST("startup-ack-peer-and-session-binding",{
+  uint8_t mac[6]={2,0,0,0,0,1},other[6]={2,0,0,0,0,2};startup::Sensor s;s.begin(mac,20);startup::Packet d;d.hubSession=10;CHECK(s.receive(mac,d));s.announce(0,"Rod",true,64);
+  startup::Packet ack;ack.kind=startup::Kind::Ack;ack.hubSession=10;ack.sensorSession=20;ack.node=1;
+  CHECK(!s.receive(other,ack));ack.sensorSession=21;CHECK(!s.receive(mac,ack));ack.sensorSession=20;ack.hubSession=11;CHECK(!s.receive(mac,ack));ack.hubSession=10;
+  CHECK(s.receive(mac,ack)&&s.confirmed()&&s.node()==1&&!s.due(999999));CHECK(!s.receive(mac,d));
+  d.hubSession=11;CHECK(s.receive(mac,d)&&!s.confirmed());s.announce(1000,"Rod",true,64);CHECK(!s.receive(mac,ack));ack.hubSession=11;CHECK(s.receive(mac,ack));
+ });
+ TEST("startup-ack-first-and-old-discovery-do-not-restart",{ uint8_t mac[6]={2,0,0,0,0,1};startup::Sensor s;s.begin(mac,20);s.announce(0,"Rod",false,0);startup::Packet ack;ack.kind=startup::Kind::Ack;ack.hubSession=10;ack.sensorSession=20;ack.node=1;CHECK(s.receive(mac,ack));startup::Packet d;d.hubSession=10;CHECK(!s.receive(mac,d)&&s.confirmed());d.hubSession=11;CHECK(s.receive(mac,d));d.hubSession=10;CHECK(!s.receive(mac,d)); });
+ TEST("startup-discovery-bounded-and-legacy-independent",{
+  startup::Discovery d;d.begin(10,0);CHECK(d.due(0));CHECK(d.take().kind==startup::Kind::Discover);CHECK(!d.due(1199));CHECK(d.due(1200));d.take();CHECK(d.due(2400));d.take();CHECK(!d.due(8000)&&!d.due(999999));
+  startup::Packet hello;hello.kind=startup::Kind::Announce;hello.sensorSession=20;CHECK(d.accepts(hello));hello.hubSession=11;CHECK(!d.accepts(hello));hello.hubSession=10;CHECK(d.accepts(hello));auto ack=d.ack(hello,1);CHECK(ack.hubSession==10&&ack.sensorSession==20&&ack.node==1);
+ });
+ TEST("legacy-transmitted-name-keeps-utf8-prefix",{ WirePacket p{};startup::copyName(p.rodName,"ЁЖИК-ДЛИННЫЙ");p.eventType=1;p.batteryPct=64;p.deltaG=.02f;uint8_t mac[6]={2,0,0,0,0,1};Event e;CHECK(startup::nameValid(p.rodName));CHECK(decode(reinterpret_cast<uint8_t*>(&p),sizeof(p),mac,10,e));CHECK(std::strchr(e.name,'?')==nullptr);CHECK(sizeof(p)==22); });
+ TEST("startup-rollover-and-unknown-battery",{
+  uint8_t mac[6]={2,0,0,0,0,1};startup::Sensor s;s.begin(mac,20);uint32_t t=0xffffff00u;s.announce(t,"Rod",false,0);CHECK(!s.due(t+699)&&s.due(t+700));
+  CHECK(!startup::batteryKnown(.6f)&&!startup::batteryKnown(5.f)&&startup::batteryKnown(3.7f));char name[16];startup::copyName(name,"АБВГДЕЁЖЗ");CHECK(startup::nameValid(name));
  });
  std::printf("%d tests, 0 failed\n",count);
 }

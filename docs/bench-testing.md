@@ -116,3 +116,7 @@ Radio остаётся без application ACK: MAC success не гарантир
 При ошибке чтения существующего `/config.db` настройки работают только в RAM: ручное сохранение, библиотечный autosave и сохранение калибровки не меняют исходный файл. Для проверки сохранить копию/хеш файла до старта, изменить настройку и провести калибровку, подождать более 10 с и сравнить байты. Новая отсутствующая БД создаётся штатно.
 
 Storage integration использует установленный `.pio/libdeps/xiao_esp32c3/GyverDB/src/GyverDBFile.h`: исходные begin/tick/update/destructor компилируются с fake platform/FS и production ConfigDatabase. На чистом checkout сначала выполнить указанную PIO сборку C3; standalone core suite этого header не требует. `python3 tests/test_storage_integration.py --baseline` намеренно воспроизводит отказ исходного незащищённого GyverDBFile.
+
+## HU02: разовая регистрация
+
+Алгоритм детекции/пины/CSV и настройки сохранены. Добавлены совместимые стартовые control-пакеты: [протокол и USB-команды](startup-registration.md). У датчика `status` не меняет охрану; `register` — явная диагностика только Disarmed, без события поклёвки; `peer <MAC>` только Disarmed с проверенной записью существующих ключей. При недостоверном измерении батареи (`vbat` вне2.5…4.5V) low-battery не отправляется, в том числе на USB-стенде. [Схема питания](power-and-wiring.md).
