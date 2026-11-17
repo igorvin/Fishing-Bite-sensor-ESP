@@ -1,5 +1,6 @@
 #include "HubCore.h"
 #include "HubRender.h"
+#include "DriverSession.h"
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -10,7 +11,32 @@ static int count=0;
 #define TEST(name,...) do {__VA_ARGS__; ++count;std::printf("PASS: %s\n",name);}while(0)
 Event event(uint8_t rod,uint8_t type,uint32_t at,const char* name="ПРУД"){Event e;e.mac={2,0,0,0,0,rod};std::strncpy(e.name,name,16);e.type=type;e.battery=64;e.delta=.12f;e.at=at;return e;}
 WirePacket packet(){WirePacket p{};std::strcpy(p.rodName,"ПРУД");p.eventType=1;p.batteryPct=64;p.deltaG=.1f;return p;}
+// Reproduces GrayOLED's resource behavior: begin allocates a bus object even
+// when initialization subsequently fails; only the destructor releases it.
+struct FakeBus {
+ inline static int live=0,peak=0;
+ FakeBus(){++live;peak=std::max(peak,live);}~FakeBus(){--live;}
+};
+struct FakeDisplay {
+ inline static int live=0,peak=0;
+ FakeBus* bus=nullptr;
+ FakeDisplay(){++live;peak=std::max(peak,live);}
+ ~FakeDisplay(){delete bus;--live;}
+ bool begin(bool success){bus=new FakeBus;return success;}
+};
 int main(){
+ TEST("oled-retry-releases-successful-and-partial-driver",{
+  {
+   DriverSession<FakeDisplay> session;
+   for(int i=0;i<64;++i){bool success=i%3!=2;
+    bool ready=session.begin([](){return new FakeDisplay;},[success](FakeDisplay& d){return d.begin(success);});
+    CHECK(ready==success);CHECK(FakeDisplay::live==(success?1:0));CHECK(FakeBus::live==(success?1:0));
+   }
+  }
+  CHECK(FakeDisplay::live==0&&FakeBus::live==0);CHECK(FakeDisplay::peak==1&&FakeBus::peak==1);
+  DriverSession<FakeDisplay> failedAllocation;
+  CHECK(!failedAllocation.begin([]()->FakeDisplay*{return nullptr;},[](FakeDisplay& d){return d.begin(true);}));
+ });
  TEST("wire-size-and-valid-decode",{
   auto p=packet();Event e;uint8_t mac[]={2,0,0,0,0,1};CHECK(sizeof(p)==22);CHECK(decode((uint8_t*)&p,22,mac,123,e));CHECK(e.type==1&&e.battery==64&&e.at==123);CHECK(!std::strcmp(e.name,"ПРУД"));
  });
@@ -40,8 +66,14 @@ int main(){
  TEST("continuation-coalesces-without-extending-alert",{
   Model m;m.begin(0);CHECK(m.ingest(event(1,1,100),100).newEpisode);for(uint32_t t=300;t<=3900;t+=200){CHECK(!m.ingest(event(1,2,t),t).newEpisode);m.tick(t);}CHECK(m.historyCount()==1);CHECK(m.history(0).type==2);CHECK(!m.alert().valid);
  });
+ TEST("maximum-sensor-repeat-includes-fresh-sample-jitter",{
+  Model m;m.begin(0);m.ingest(event(1,1,100),100);
+  for(uint32_t t:{2101u,4110u,6120u}){m.tick(t);auto result=m.ingest(event(1,2,t),t);CHECK(!result.newEpisode&&!result.motor);}
+  CHECK(m.historyCount()==1);CHECK(!m.alert().valid);
+  CHECK(m.ingest(event(1,1,6130),6130).newEpisode);CHECK(m.historyCount()==2);
+ });
  TEST("continuation-after-gap-becomes-new-episode",{
-  Model m;m.begin(0);m.ingest(event(1,1,100),100);CHECK(m.ingest(event(1,2,2201),2201).newEpisode);CHECK(m.historyCount()==2);
+  Model m;m.begin(0);m.ingest(event(1,1,100),100);CHECK(m.ingest(event(1,2,2701),2701).newEpisode);CHECK(m.historyCount()==2);
  });
  TEST("multiple-rods-display-fifo",{
   Model m;m.begin(0);m.ingest(event(1,1,100),100);m.ingest(event(2,1,200),200);m.ingest(event(3,1,300),300);CHECK(m.alert().rod==0);m.tick(3600);CHECK(m.alert().rod==1);m.tick(7100);CHECK(m.alert().rod==2);CHECK(m.historyCount()==3);

@@ -7,11 +7,13 @@
 #include <Adafruit_SH110X.h>
 #include "HubCore.h"
 #include "HubRender.h"
+#include "DriverSession.h"
+#include <new>
 
 // Existing hub wiring. No menu button is assigned; confirmed buttonless hub.
 constexpr int LedPin=D1,MotorPin=D2,BatteryPin=A0;
 constexpr uint8_t RadioChannel=1; // Existing sensor softAP defaults to channel 1; verify on the physical pair.
-Adafruit_SH1106G oled(128,64,&Wire,-1);
+hub::DriverSession<Adafruit_SH1106G> oled;
 hub::Model model;
 hub::Motor motor;
 hub::Ring<hub::Event,hub::RxDepth> inbox;
@@ -53,7 +55,9 @@ void beginOled(uint32_t now){
  if(oledReady||(oledAttempted&&hub::elapsed(now,oledAttemptAt)<2000))return;
  oledAttempted=true;oledAttemptAt=now;
  oledAddress=probe(0x3c)?0x3c:probe(0x3d)?0x3d:0;
- if(!oledAddress||!oled.begin(oledAddress,true))return;
+ if(!oledAddress||!oled.begin(
+  [](){return new(std::nothrow) Adafruit_SH1106G(128,64,&Wire,-1);},
+  [](Adafruit_SH1106G& driver){return driver.begin(oledAddress,true);}))return;
  oledReady=true;frameValid=false;powerKnown=false;
 }
 void readBattery(){
@@ -82,8 +86,8 @@ void updateOled(uint32_t now){
  hub::Power power=model.power(now);
  if(!powerKnown||power!=appliedPower){
   if(!probe(oledAddress)){oledReady=false;oledAttemptAt=now;return;}
-  if(power==hub::Power::Off)oled.oled_command(SH110X_DISPLAYOFF);
-  else {oled.oled_command(SH110X_DISPLAYON);oled.oled_command(0x81);oled.oled_command(power==hub::Power::Dim?0x20:0xff);}
+  if(power==hub::Power::Off)oled->oled_command(SH110X_DISPLAYOFF);
+  else {oled->oled_command(SH110X_DISPLAYON);oled->oled_command(0x81);oled->oled_command(power==hub::Power::Dim?0x20:0xff);}
   appliedPower=power;powerKnown=true;frameValid=false;
  }
  if(power==hub::Power::Off||(frameValid&&hub::elapsed(now,lastDrawAt)<200))return;
@@ -93,7 +97,7 @@ void updateOled(uint32_t now){
  hub::Frame frame=hub::render(model,now,hubBattery,d);
  if(frameValid&&frame.bytes==lastFrame.bytes)return;
  if(!probe(oledAddress)){oledReady=false;oledAttemptAt=now;return;}
- oled.clearDisplay();oled.drawBitmap(0,0,frame.bytes.data(),128,64,SH110X_WHITE);oled.display();
+ oled->clearDisplay();oled->drawBitmap(0,0,frame.bytes.data(),128,64,SH110X_WHITE);oled->display();
  // display() has no transport return status, so re-probe before trusting state.
  if(!probe(oledAddress)){oledReady=false;oledAttemptAt=now;return;}
  lastFrame=frame;frameValid=true;

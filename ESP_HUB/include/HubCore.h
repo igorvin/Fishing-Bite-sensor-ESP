@@ -8,7 +8,9 @@
 
 namespace hub {
 constexpr size_t MaxRods=8, HistorySize=12, RxDepth=24;
-constexpr uint32_t AlertMs=3500, EpisodeGapMs=2000, PageMs=8000;
+// Sensor permits repeatMs=2000; fresh-sample scheduling can exceed that by
+// one sample. Allow bounded scheduling/transport jitter, not unlimited gaps.
+constexpr uint32_t AlertMs=3500, EpisodeGapMs=2500, PageMs=8000;
 inline uint32_t elapsed(uint32_t now,uint32_t then){return now-then;}
 struct __attribute__((packed)) WirePacket {char rodName[16];uint8_t eventType,batteryPct;float deltaG;};
 static_assert(sizeof(WirePacket)==22,"Existing sensor wire format must remain 22 bytes");
