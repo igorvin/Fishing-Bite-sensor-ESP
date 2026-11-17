@@ -6,7 +6,7 @@ Guidance for coding agents working in this repository. Read `.autopilot/PROGRESS
 
 This is a two-device ESP-NOW fishing-rod motion sensor system. The current software release is a **bench candidate**, not a field-validated bite detector. The existing sensor bench uses Seeed XIAO ESP32-C3 + LSM6DS3; the planned sensor board is Seeed XIAO ESP32-S3. The hub uses a SH1106 OLED.
 
-The sensor source release is commit `1b8c6b6`. It passed 29 host tests, actual GyverDBFile storage integration, and clean-clone C3/S3 builds. C6 also compiled in the working project. Sensor C3 firmware was flashed; USB IMU samples were received and its mobile UI accepted on a phone. Field detection accuracy, radio reception, current consumption, range and battery life remain unvalidated.
+The detector baseline is `1b8c6b6`; current HU02 two-role firmware is `9916cf0`. Independent clean-clone checks passed 29 sensor tests, 36 hub tests (ASan/UBSan), four C3/S3 builds and eight actual-renderer frames. Both identified physical XIAO C3 roles were flashed with verified data and no backups as authorized. Startup radio registration and healthy sensor IMU/DISARMED status were observed. Field bite accuracy, actual motor vibration, RF range, battery charging and 48-hour endurance remain unvalidated.
 
 ## Commands
 
@@ -33,7 +33,7 @@ The fixture has 701 synthetic samples and yields 2 Dynamic events versus 0 Legac
 
 User-operated upload/monitor procedures are in `docs/bench-testing.md`. Sensor C3 upload was performed separately; software checks alone do not establish hardware acceptance. Do **not** routinely run erase-flash or uploadfs after a firmware update: these can destroy settings. An application-only `firmware.bin` is not a complete image to write at address zero.
 
-The hub is a separate PlatformIO project in `ESP_HUB/`. Hub release `e9701c6` implements the SH1106 list/large-alert/history redesign with automatic navigation and pinned shared C3/S3 dependencies. Clean-clone C3/S3 builds pass; no physical hub has been flashed or accepted. The older audit describes historical issues, not the current hub state.
+The hub is a separate PlatformIO project in `ESP_HUB/`. HU02 defaults to a compact summary for 8 s, then OLED off; fresh alerts wake it. List/history/service are manual USB views. Startup registration, a hub-only restart recovering the running sensor, no-motion diagnostic registration and a quiet control-traffic window were verified on the C3 pair. Details and remaining acceptance: `docs/hub-testing.md`; wire contract: `docs/startup-registration.md`; battery diagram and unmeasured energy target: `docs/power-and-wiring.md`.
 
 Hub checks from the repository root:
 
@@ -46,7 +46,8 @@ pio run -d ESP_HUB -e xiao_esp32c3 -e seeed_xiao_esp32s3
 ## Source pointers
 
 - `ESP_HUB/src/main.cpp`, `ESP_HUB/include/HubCore.h`, `HubRender.h`, `DriverSession.h`: hub hardware adapter, portable model, shared one-bit renderer and OLED retry ownership.
-- `docs/hub-testing.md`: pending physical hub acceptance.
+- `docs/hub-testing.md`: limited HU02 hardware results and remaining physical acceptance.
+- `shared/StartupRadio.h`: shared bounded startup control parser/state used by both firmware roles.
 - `src/main.cpp`: firmware integration, Settings UI, configuration, outputs, ESP-NOW, USB CSV, and sleep policy.
 - `include/SensorCore.h`: portable production detector, also used by host tests and replay.
 - `include/ImuDriver.h`, `include/ImuRead.h`: LSM6DS3 initialization and checked, fresh XYZ burst reads.
@@ -70,13 +71,13 @@ pio run -d ESP_HUB -e xiao_esp32c3 -e seeed_xiao_esp32s3
 - Preserve `/config.db`. A failed load of an existing database must leave its bytes intact and disable all automatic/manual writes. Do not format a nonempty filesystem to hide an error; saved settings must not be claimed when only RAM changes succeeded.
 - CSV records fresh samples through a 2048-byte buffer; overflow drops whole lines and is counted. Flash is not written per sample. Replay uses a fixed calibration/ARM schedule, not a full reconstruction of past UI/radio actions.
 - Battery voltage uses calibrated millivolts and the existing divider. Voltage-derived percentage is approximate; no measured battery-life claim is available.
-- The hub packet remains **packed, 22 bytes**: `rodName[16]`, `uint8_t eventType`, `uint8_t batteryPct`, `float deltaG`. Events 1/2/3 mean first bite, continuous motion, and low battery. No application ACK or reliable delivery guarantee was added.
+- The hub packet remains **packed, 22 bytes**: `rodName[16]`, `uint8_t eventType`, `uint8_t batteryPct`, `float deltaG`. Events 1/2/3 mean first bite, continuous motion, and low battery. There is no alarm ACK or guaranteed alarm delivery. Separate 36-byte DISCOVER/ANNOUNCE/ACK control packets perform bounded one-off startup registration; this ACK does not establish a live link. Legacy alarms have no battery-validity bit, so re-register after an actual battery/power change to refresh an unknown validity flag.
 
 Sensor PlatformIO and direct libraries are pinned in `platformio.ini`: official Espressif32 8.0.0 / Arduino-ESP32 3.3.12. Do not restore floating `stable` URLs or mix platform providers in one cache. Direct versions are pinned; this is not a complete transitive lockfile.
 
-Hub traps: preserve D4/D5 OLED, D1 LED, D2 motor and A0 divider pins. Receiver channel 1 must be verified with the physical sensor pair. The 8-sender registry and 12-episode history are RAM-only; numbering resets after boot. There is no heartbeat, ACK or remote ARM telemetry.
+Hub traps: preserve D4/D5 OLED, D1 LED, D2 motor and A0 divider pins. Receiver channel 1 was verified for startup exchange on the physical C3 pair. Radio stays awake; no ongoing heartbeat, alarm ACK or remote ARM telemetry. The 8-sender registry and 12-episode history are RAM-only. Counts mean known senders since boot, not currently reachable sensors; numbering resets on reboot.
 
-OLED retries must destroy the previous driver before initialization and destroy partially failed candidates; keep the production `DriverSession` ownership seam. Software hub tests are 26/0 with ASan/UBSan; preview uses the exact renderer, not real OLED hardware.
+OLED retries must destroy the previous driver before initialization and destroy partially failed candidates; retain production `DriverSession` ownership. Do not reintroduce idle screen rotation, probes or ADC polling while a healthy OLED is off. USB status confirmed startup ON then OFF; physical motor and OLED disconnect/reconnect recovery still need acceptance.
 
 ## Ordinary work and history
 

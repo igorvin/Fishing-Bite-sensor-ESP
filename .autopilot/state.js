@@ -13,7 +13,7 @@ window.STATE =
   "skillDir": "/Users/macbook-air/.agents/skills/autopilot",
   "baseCommit": "3b08e96",
   "startedAt": "2026-11-14T22:51:11+02:00",
-  "updatedAt": "2026-11-17T19:48:04+02:00",
+  "updatedAt": "2026-11-17T20:14:12+02:00",
   "finishedAt": null,
   "stages": [
     {
@@ -66,9 +66,9 @@ window.STATE =
   ],
   "requirements": {
     "total": 27,
-    "done": 20,
-    "inTicket": 2,
-    "inSpec": 4,
+    "done": 25,
+    "inTicket": 0,
+    "inSpec": 1,
     "placeholder": 0,
     "deferred": 1,
     "dropped": 0
@@ -217,14 +217,20 @@ window.STATE =
       "zone": [],
       "review": "нет",
       "model": "сильная",
-      "status": "in-progress",
+      "status": "done",
       "retries": 0,
       "repairs": 0,
-      "startedAt": "2026-11-17T19:46:34+02:00"
+      "startedAt": "2026-11-17T19:46:34+02:00",
+      "finishedAt": "2026-11-17T20:14:11+02:00",
+      "tests": {
+        "passed": 65,
+        "failed": 0
+      },
+      "commit": "9916cf0"
     }
   ],
   "tests": {
-    "passed": 55,
+    "passed": 65,
     "failed": 0
   },
   "debt": {
@@ -241,8 +247,8 @@ window.STATE =
   },
   "concerns": [],
   "blind": {
-    "checked": 2,
-    "matched": 2,
+    "checked": 3,
+    "matched": 3,
     "mismatches": []
   },
   "beats": [
@@ -276,9 +282,12 @@ window.STATE =
     "2026-11-17T08:44:06+02:00",
     "2026-11-17T08:44:07+02:00",
     "2026-11-17T19:46:34+02:00",
-    "2026-11-17T19:48:04+02:00"
+    "2026-11-17T19:48:04+02:00",
+    "2026-11-17T20:04:20+02:00",
+    "2026-11-17T20:14:11+02:00",
+    "2026-11-17T20:14:12+02:00"
   ],
-  "rev": 70,
+  "rev": 78,
   "waiting": null,
   "waits": [
     {
@@ -749,6 +758,56 @@ window.STATE =
       "found": 3,
       "fixed": 3,
       "deferred": 0
+    },
+    {
+      "t": "2026-11-17T20:04:20+02:00",
+      "k": "ticket",
+      "ids": [
+        "HU02"
+      ],
+      "act": "done",
+      "tests": {
+        "passed": 65,
+        "failed": 0
+      }
+    },
+    {
+      "t": "2026-11-17T20:04:20+02:00",
+      "k": "stage",
+      "id": "review",
+      "act": "start"
+    },
+    {
+      "t": "2026-11-17T20:14:11+02:00",
+      "k": "ticket",
+      "ids": [
+        "HU02"
+      ],
+      "act": "done",
+      "tests": {
+        "passed": 65,
+        "failed": 0
+      }
+    },
+    {
+      "t": "2026-11-17T20:14:11+02:00",
+      "k": "stage",
+      "id": "final",
+      "act": "start"
+    },
+    {
+      "t": "2026-11-17T20:14:11+02:00",
+      "k": "gate",
+      "g": "G4",
+      "ok": true,
+      "checked": 3,
+      "matched": 3
+    },
+    {
+      "t": "2026-11-17T20:14:12+02:00",
+      "k": "tests",
+      "passed": 65,
+      "failed": 0
     }
   ],
   "reqList": [
@@ -850,17 +909,17 @@ window.STATE =
     {
       "id": "G14",
       "text": "«можешь делать upload на саму ESP-шку код, я разрешаю»",
-      "status": "in-spec"
+      "status": "done"
     },
     {
       "id": "G15",
       "text": "«не надо делать никаких бэкапов, просто сразу делай upload»",
-      "status": "in-spec"
+      "status": "done"
     },
     {
       "id": "G16",
       "text": "«Это C3, я ошибся»",
-      "status": "in-spec"
+      "status": "done"
     },
     {
       "id": "G17",
@@ -875,7 +934,7 @@ window.STATE =
     {
       "id": "G19",
       "text": "«высвечивалось количество ... Просто номер»; «дисплей ... выключался ... только во время поклёвки»",
-      "status": "in-ticket"
+      "status": "done"
     },
     {
       "id": "G20",
@@ -886,7 +945,7 @@ window.STATE =
     {
       "id": "G21",
       "text": "«продолжай править прошивку»; «загрузи ... на хаб»",
-      "status": "in-ticket"
+      "status": "done"
     }
   ],
   "gates": {
@@ -899,9 +958,9 @@ window.STATE =
     },
     "G4": {
       "ok": true,
-      "at": "2026-11-17T08:44:06+02:00",
-      "checked": 2,
-      "matched": 2
+      "at": "2026-11-17T20:14:11+02:00",
+      "checked": 3,
+      "matched": 3
     }
   },
   "result": null,
@@ -918,5 +977,5 @@ window.STATE =
     "Физическая эффективность и автономность не подтверждены; это ограничение доказательств, не softwaremismatch",
     "Программная приёмка G17/G18 хаба пройдена в чистом клоне; аппаратный OLED/радио/мотор ещё не проверены. Остальной ранее открытый план остаётся открытым."
   ],
-  "blindRounds": 1
+  "blindRounds": 2
 }
