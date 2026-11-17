@@ -55,3 +55,9 @@ Clock/time injection для переходов/таймеров и rollover; rep
 ## Построено в F1
 
 `bite::ConfigDatabase<FileDatabase>::begin/update/tick` закрывает auto/manual/destructor запись при ошибке чтения существующей БД; `bite::ImuSession::begin/supervise/due/read/online` задаёт150ms first-frame deadline и2000ms retry. Host29/0; отдельная интеграция actual GyverDBFile0failed (для неё сначала C3 PIO fetch/build); C3/S3/C6 SUCCESS. Поведение детектора/протокол/P3 без изменений.
+
+## Хаб HU01 — границы
+
+Подтверждён выбранный комбинированный OLED и отсутствие кнопок. HubCore — bounded decode/UTF8, модель реестра/журнала/тревог, таймеры и motor. HubRender — production1bit128×64frame и собственный компактныйшрифт дляhost/OLED. main.cpp — ESP-NOWcallback/concurrency,I2C,пины, Serialnavigation, аппаратныеадаптеры. Никаких изменений22байтногоsensorпакета; отсутствующиеheartbeat/armedданные не выдумываются. Код датчика и его29тестов не изменяются. ТекущаяподключённаяC3 не автоматическиhub. ПриёмкаOLED/радио/мотора на реальномхабе остаётся отдельной доидентификации.
+
+HU01 реализован d24dc07; F2 e9701c6 закрываетdriverlifetimeиразницуrepeatMs2000/фактических2010ms. ProductionDriverSession<Driver>::begin пересоздаётdriverсRAIIиосвобождаетчастичноfailedbegin. Hub26/0ASan+UBSan, sensor29/0; C3/S3SUCCESS. Независимое повторное ревьюF2: обаусловиязакрыты, новыхблокеровнет.

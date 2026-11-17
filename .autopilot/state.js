@@ -13,7 +13,7 @@ window.STATE =
   "skillDir": "/Users/macbook-air/.agents/skills/autopilot",
   "baseCommit": "3b08e96",
   "startedAt": "2026-11-14T22:51:11+02:00",
-  "updatedAt": "2026-11-17T08:02:21+02:00",
+  "updatedAt": "2026-11-17T08:44:07+02:00",
   "finishedAt": null,
   "stages": [
     {
@@ -48,22 +48,26 @@ window.STATE =
     },
     {
       "id": "build",
-      "status": "active",
-      "startedAt": "2026-11-17T08:02:21+02:00"
+      "status": "done",
+      "startedAt": "2026-11-17T08:02:21+02:00",
+      "finishedAt": "2026-11-17T08:26:20+02:00"
     },
     {
       "id": "review",
-      "status": "pending"
+      "status": "done",
+      "startedAt": "2026-11-17T08:26:20+02:00",
+      "finishedAt": "2026-11-17T08:42:20+02:00"
     },
     {
       "id": "final",
-      "status": "pending"
+      "status": "active",
+      "startedAt": "2026-11-17T08:42:20+02:00"
     }
   ],
   "requirements": {
     "total": 24,
-    "done": 18,
-    "inTicket": 2,
+    "done": 20,
+    "inTicket": 0,
     "inSpec": 4,
     "placeholder": 0,
     "deferred": 0,
@@ -151,6 +155,31 @@ window.STATE =
       "commit": "1b8c6b6"
     },
     {
+      "id": "F2",
+      "title": "Ремонт хаба по независимому ревью",
+      "requirements": [
+        "G17",
+        "G18"
+      ],
+      "blockedBy": [
+        "HU01"
+      ],
+      "wave": 2,
+      "zone": [],
+      "review": "да — ремонт ветки",
+      "model": "сильная",
+      "status": "done",
+      "retries": 0,
+      "repairs": 0,
+      "startedAt": "2026-11-17T08:30:29+02:00",
+      "finishedAt": "2026-11-17T08:42:19+02:00",
+      "tests": {
+        "passed": 55,
+        "failed": 0
+      },
+      "commit": "e9701c6"
+    },
+    {
       "id": "HU01",
       "title": "Комбинированный дисплей и переработка хаба",
       "requirements": [
@@ -162,14 +191,20 @@ window.STATE =
       "zone": [],
       "review": "нет (T0, одно итоговое ревью)",
       "model": "сильная",
-      "status": "in-progress",
+      "status": "done",
       "startedAt": "2026-11-17T08:02:02+02:00",
+      "finishedAt": "2026-11-17T08:26:20+02:00",
       "retries": 0,
-      "repairs": 0
+      "repairs": 0,
+      "tests": {
+        "passed": 53,
+        "failed": 0
+      },
+      "commit": "d24dc07"
     }
   ],
   "tests": {
-    "passed": 29,
+    "passed": 55,
     "failed": 0
   },
   "debt": {
@@ -185,7 +220,11 @@ window.STATE =
     "items": []
   },
   "concerns": [],
-  "blind": null,
+  "blind": {
+    "checked": 2,
+    "matched": 2,
+    "mismatches": []
+  },
   "beats": [
     "2026-11-14T22:51:11+02:00",
     "2026-11-14T22:54:02+02:00",
@@ -208,9 +247,16 @@ window.STATE =
     "2026-11-15T19:34:06+02:00",
     "2026-11-17T08:01:45+02:00",
     "2026-11-17T08:02:02+02:00",
-    "2026-11-17T08:02:21+02:00"
+    "2026-11-17T08:02:21+02:00",
+    "2026-11-17T08:26:20+02:00",
+    "2026-11-17T08:30:29+02:00",
+    "2026-11-17T08:41:08+02:00",
+    "2026-11-17T08:42:19+02:00",
+    "2026-11-17T08:42:20+02:00",
+    "2026-11-17T08:44:06+02:00",
+    "2026-11-17T08:44:07+02:00"
   ],
-  "rev": 55,
+  "rev": 66,
   "waiting": null,
   "waits": [
     {
@@ -564,6 +610,95 @@ window.STATE =
       "k": "stage",
       "id": "build",
       "act": "start"
+    },
+    {
+      "t": "2026-11-17T08:26:20+02:00",
+      "k": "ticket",
+      "ids": [
+        "HU01"
+      ],
+      "act": "done",
+      "tests": {
+        "passed": 53,
+        "failed": 0
+      }
+    },
+    {
+      "t": "2026-11-17T08:26:20+02:00",
+      "k": "stage",
+      "id": "review",
+      "act": "start"
+    },
+    {
+      "t": "2026-11-17T08:30:29+02:00",
+      "k": "tickets",
+      "n": 4
+    },
+    {
+      "t": "2026-11-17T08:30:29+02:00",
+      "k": "ticket",
+      "ids": [
+        "F2"
+      ],
+      "act": "start"
+    },
+    {
+      "t": "2026-11-17T08:41:08+02:00",
+      "k": "ticket",
+      "ids": [
+        "F2"
+      ],
+      "act": "done",
+      "tests": {
+        "passed": 55,
+        "failed": 0
+      }
+    },
+    {
+      "t": "2026-11-17T08:41:08+02:00",
+      "k": "ticket",
+      "ids": [
+        "F2"
+      ],
+      "act": "review"
+    },
+    {
+      "t": "2026-11-17T08:42:19+02:00",
+      "k": "ticket",
+      "ids": [
+        "F2"
+      ],
+      "act": "done",
+      "tests": {
+        "passed": 55,
+        "failed": 0
+      }
+    },
+    {
+      "t": "2026-11-17T08:42:20+02:00",
+      "k": "stage",
+      "id": "final",
+      "act": "start"
+    },
+    {
+      "t": "2026-11-17T08:44:06+02:00",
+      "k": "gate",
+      "g": "G4",
+      "ok": true,
+      "checked": 2,
+      "matched": 2
+    },
+    {
+      "t": "2026-11-17T08:44:07+02:00",
+      "k": "tests",
+      "passed": 55,
+      "failed": 0
+    },
+    {
+      "t": "2026-11-17T08:44:07+02:00",
+      "k": "add",
+      "key": "report",
+      "n": 1
     }
   ],
   "reqList": [
@@ -680,12 +815,12 @@ window.STATE =
     {
       "id": "G17",
       "text": "«перерабатывать полностью хаб ... полностью фокус на дисплей»",
-      "status": "in-ticket"
+      "status": "done"
     },
     {
       "id": "G18",
       "text": "«сочетание»",
-      "status": "in-ticket"
+      "status": "done"
     }
   ],
   "gates": {
@@ -695,6 +830,12 @@ window.STATE =
       "found": 2,
       "fixed": 2,
       "deferred": 0
+    },
+    "G4": {
+      "ok": true,
+      "at": "2026-11-17T08:44:06+02:00",
+      "checked": 2,
+      "matched": 2
     }
   },
   "result": null,
@@ -708,7 +849,8 @@ window.STATE =
     "P3: переключатель веб-охраны может отставать от кнопки/Fault до обновления страницы; фактическое состояние показывается в State",
     "Аппаратные и полевые проверки не выполнялись; invalid D6 wake блокирует сон, схема требует проверки",
     "Текущий итог supersedes исторический аудит: sensor реализован, source1b8c6b6, cleanclone18/18software, F1закрыт",
-    "Физическая эффективность и автономность не подтверждены; это ограничение доказательств, не softwaremismatch"
+    "Физическая эффективность и автономность не подтверждены; это ограничение доказательств, не softwaremismatch",
+    "Программная приёмка G17/G18 хаба пройдена в чистом клоне; аппаратный OLED/радио/мотор ещё не проверены. Остальной ранее открытый план остаётся открытым."
   ],
-  "blindRounds": 0
+  "blindRounds": 1
 }
