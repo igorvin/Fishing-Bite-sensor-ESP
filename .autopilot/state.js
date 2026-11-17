@@ -13,7 +13,7 @@ window.STATE =
   "skillDir": "/Users/macbook-air/.agents/skills/autopilot",
   "baseCommit": "3b08e96",
   "startedAt": "2026-11-14T22:51:11+02:00",
-  "updatedAt": "2026-11-15T19:34:06+02:00",
+  "updatedAt": "2026-11-17T08:02:21+02:00",
   "finishedAt": null,
   "stages": [
     {
@@ -30,20 +30,26 @@ window.STATE =
     },
     {
       "id": "briefing",
-      "status": "active",
-      "startedAt": "2026-11-15T19:30:44+02:00"
+      "status": "done",
+      "startedAt": "2026-11-15T19:30:44+02:00",
+      "finishedAt": "2026-11-17T08:02:21+02:00"
     },
     {
       "id": "spec",
-      "status": "pending"
+      "status": "done",
+      "startedAt": "2026-11-17T08:02:21+02:00",
+      "finishedAt": "2026-11-17T08:02:21+02:00"
     },
     {
       "id": "plan",
-      "status": "pending"
+      "status": "done",
+      "startedAt": "2026-11-17T08:02:21+02:00",
+      "finishedAt": "2026-11-17T08:02:21+02:00"
     },
     {
       "id": "build",
-      "status": "pending"
+      "status": "active",
+      "startedAt": "2026-11-17T08:02:21+02:00"
     },
     {
       "id": "review",
@@ -55,9 +61,9 @@ window.STATE =
     }
   ],
   "requirements": {
-    "total": 22,
+    "total": 24,
     "done": 18,
-    "inTicket": 0,
+    "inTicket": 2,
     "inSpec": 4,
     "placeholder": 0,
     "deferred": 0,
@@ -134,15 +140,32 @@ window.STATE =
       "review": "да — ремонт ветки",
       "model": "сильная",
       "status": "done",
-      "retries": 0,
-      "repairs": 0,
       "startedAt": "2026-11-15T00:05:03+02:00",
       "finishedAt": "2026-11-15T07:55:49+02:00",
+      "retries": 0,
+      "repairs": 0,
       "tests": {
         "passed": 29,
         "failed": 0
       },
       "commit": "1b8c6b6"
+    },
+    {
+      "id": "HU01",
+      "title": "Комбинированный дисплей и переработка хаба",
+      "requirements": [
+        "G17",
+        "G18"
+      ],
+      "blockedBy": [],
+      "wave": null,
+      "zone": [],
+      "review": "нет (T0, одно итоговое ревью)",
+      "model": "сильная",
+      "status": "in-progress",
+      "startedAt": "2026-11-17T08:02:02+02:00",
+      "retries": 0,
+      "repairs": 0
     }
   ],
   "tests": {
@@ -156,8 +179,8 @@ window.STATE =
   },
   "additions": [],
   "coverage": {
-    "found": 1,
-    "fixed": 1,
+    "found": 2,
+    "fixed": 2,
     "deferred": 0,
     "items": []
   },
@@ -182,14 +205,13 @@ window.STATE =
     "2026-11-15T08:06:53+02:00",
     "2026-11-15T19:30:41+02:00",
     "2026-11-15T19:30:44+02:00",
-    "2026-11-15T19:34:06+02:00"
+    "2026-11-15T19:34:06+02:00",
+    "2026-11-17T08:01:45+02:00",
+    "2026-11-17T08:02:02+02:00",
+    "2026-11-17T08:02:21+02:00"
   ],
-  "rev": 50,
-  "waiting": {
-    "kind": "briefing",
-    "since": "2026-11-15T19:34:06+02:00",
-    "note": "C3 прошита и данные верифицированы. Пользователь выполняет ручную проверку и вернётся с результатами; ожидаются измерения/наблюдения стенда."
-  },
+  "rev": 55,
+  "waiting": null,
   "waits": [
     {
       "kind": "briefing",
@@ -200,6 +222,11 @@ window.STATE =
       "kind": "briefing",
       "from": "2026-11-14T23:07:36+02:00",
       "to": "2026-11-14T23:28:18+02:00"
+    },
+    {
+      "kind": "briefing",
+      "from": "2026-11-15T19:34:06+02:00",
+      "to": "2026-11-17T08:01:45+02:00"
     }
   ],
   "log": [
@@ -499,6 +526,44 @@ window.STATE =
       "k": "ask",
       "kind": "briefing",
       "note": "C3 прошита и данные верифицированы. Пользователь выполняет ручную проверку и вернётся с результатами; ожидаются измерения/наблюдения стенда."
+    },
+    {
+      "t": "2026-11-17T08:01:45+02:00",
+      "k": "answered",
+      "kind": "briefing"
+    },
+    {
+      "t": "2026-11-17T08:01:45+02:00",
+      "k": "gate",
+      "g": "G2",
+      "ok": true,
+      "found": 2,
+      "fixed": 2,
+      "deferred": 0
+    },
+    {
+      "t": "2026-11-17T08:01:45+02:00",
+      "k": "tickets",
+      "n": 3
+    },
+    {
+      "t": "2026-11-17T08:02:02+02:00",
+      "k": "ticket",
+      "ids": [
+        "HU01"
+      ],
+      "act": "start"
+    },
+    {
+      "t": "2026-11-17T08:02:21+02:00",
+      "k": "tickets",
+      "n": 3
+    },
+    {
+      "t": "2026-11-17T08:02:21+02:00",
+      "k": "stage",
+      "id": "build",
+      "act": "start"
     }
   ],
   "reqList": [
@@ -611,9 +676,27 @@ window.STATE =
       "id": "G16",
       "text": "«Это C3, я ошибся»",
       "status": "in-spec"
+    },
+    {
+      "id": "G17",
+      "text": "«перерабатывать полностью хаб ... полностью фокус на дисплей»",
+      "status": "in-ticket"
+    },
+    {
+      "id": "G18",
+      "text": "«сочетание»",
+      "status": "in-ticket"
     }
   ],
-  "gates": {},
+  "gates": {
+    "G2": {
+      "ok": true,
+      "at": "2026-11-17T08:01:45+02:00",
+      "found": 2,
+      "fixed": 2,
+      "deferred": 0
+    }
+  },
   "result": null,
   "report": [
     "Аудит и план готовы; прошивки не изменены, четыре таска — будущая работа",
