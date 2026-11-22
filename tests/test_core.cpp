@@ -3,6 +3,7 @@
 #include "CsvBuffer.h"
 #include "ConfigDatabase.h"
 #include "ImuSession.h"
+#include "PowerButton.h"
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -51,6 +52,37 @@ std::vector<std::pair<const char*,std::function<void()>>> tests={
 {"state-entry-grace",[]{StateClock c;c.enter(400000);require(!c.expired(400001,180000),"grace starts on disarm, not boot");require(c.expired(580000,180000),"grace ends after full interval");}},
 {"angle-wrap",[]{require(angleDifference(179,-179)<2.01f,"wrap is two degrees");}},
 {"wake-pin-validation",[]{require(!wakePinAllowed(3,21)&&!wakePinAllowed(6,16)&&!wakePinAllowed(33,43),"D6 invalid for all current boards");require(wakePinAllowed(3,4)&&wakePinAllowed(33,4),"valid range accepted");}},
+{"wake-pin-d1",[]{require(wakePinAllowed(3,3)&&wakePinAllowed(33,2)&&wakePinAllowed(6,1),"D1 (C3 GPIO3, S3 GPIO2, C6 GPIO1) can deep-wake");}},
+{"button-arm-hold",[]{PowerButton b;b.begin(false,0);uint32_t t=0;int cues=0,toggles=0,sleeps=0;
+  for(;t<=1600;t+=10){auto a=b.update(true,t);cues+=a==ButtonAction::ArmCue;}
+  for(int i=0;i<10;++i){t+=10;auto a=b.update(false,t);toggles+=a==ButtonAction::ToggleArm;sleeps+=a==ButtonAction::Sleep;}
+  require(cues==1&&toggles==1&&sleeps==0,"1-3 s hold toggles ARM once, on release");}},
+{"button-sleep-hold",[]{PowerButton b;b.begin(false,0);uint32_t t=0;int arm=0,sleepCue=0,toggles=0,sleeps=0;
+  for(;t<=3600;t+=10){auto a=b.update(true,t);arm+=a==ButtonAction::ArmCue;sleepCue+=a==ButtonAction::SleepCue;require(a!=ButtonAction::Sleep,"no sleep while still pressed");}
+  for(int i=0;i<10;++i){t+=10;auto a=b.update(false,t);toggles+=a==ButtonAction::ToggleArm;sleeps+=a==ButtonAction::Sleep;}
+  require(arm==1&&sleepCue==1&&sleeps==1&&toggles==0,">=3 s hold sleeps on release and does not toggle ARM");}},
+{"button-short-and-bounce",[]{PowerButton b;b.begin(false,0);uint32_t t=0;int any=0;
+  for(int i=0;i<40;++i){t+=10;any+=b.update(i%2==0,t)!=ButtonAction::None;}
+  for(int i=0;i<30;++i){t+=10;any+=b.update(true,t)!=ButtonAction::None;}
+  for(int i=0;i<20;++i){t+=10;any+=b.update(false,t)!=ButtonAction::None;}
+  require(any==0&&b.released(),"bounce and short press do nothing");}},
+{"button-wake-press-ignored",[]{PowerButton b;b.begin(true,0);uint32_t t=0;int any=0;
+  for(;t<=5000;t+=10)any+=b.update(true,t)!=ButtonAction::None;
+  for(int i=0;i<10;++i){t+=10;any+=b.update(false,t)!=ButtonAction::None;}
+  require(any==0,"press held from boot is not ARM or sleep");
+  for(int i=0;i<150;++i){t+=10;any+=b.update(true,t)==ButtonAction::ArmCue;}
+  require(any==1,"next real press works");}},
+{"button-rollover",[]{PowerButton b;uint32_t t=UINT32_MAX-500;b.begin(false,t);int toggles=0;
+  for(int i=0;i<150;++i){t+=10;b.update(true,t);}for(int i=0;i<10;++i){t+=10;toggles+=b.update(false,t)==ButtonAction::ToggleArm;}
+  require(toggles==1,"hold timing spans millis rollover");}},
+{"wake-confirm",[]{WakeConfirm w;w.begin(0);WakeResult r=WakeResult::Waiting;uint32_t t=0;
+  for(;t<1000&&r==WakeResult::Waiting;t+=10)r=w.update(true,t);require(r==WakeResult::Waiting,"not confirmed before 1 s");
+  r=w.update(true,1000);require(r==WakeResult::Confirmed,"held 1 s confirms");
+  w.begin(0);r=w.update(true,0);for(t=300;t<400&&r==WakeResult::Waiting;t+=10)r=w.update(false,t);require(r==WakeResult::Rejected,"brief touch goes back to sleep");
+  w.begin(0);w.update(true,500);require(w.update(false,510)==WakeResult::Waiting&&w.update(true,520)==WakeResult::Waiting&&w.update(true,1000)==WakeResult::Confirmed,"contact bounce tolerated");}},
+{"low-battery-guard",[]{LowBatteryGuard g;require(!g.update(true,3.2f)&&!g.update(true,3.2f),"two low readings not enough");require(!g.update(true,3.5f),"recovery resets");
+  g.update(true,3.2f);g.update(true,3.2f);require(g.update(true,3.29f),"three consecutive low readings trip");
+  LowBatteryGuard u;for(int i=0;i<10;++i)require(!u.update(false,0),"unknown voltage (USB only) never trips");}},
 {"config-validation",[]{SensorCore c;Config cfg;cfg.thresholdG=.001f;require(!c.configure(cfg)&&c.config().thresholdG==.02f,"bad config cannot replace last good");cfg.thresholdG=std::numeric_limits<float>::infinity();require(!c.configure(cfg),"infinite threshold rejected");}},
 {"network-validation",[]{uint8_t out[6]={9,9,9,9,9,9};require(!parseMac("100:0:00:00:00:00",out)&&out[0]==9,"overflow MAC rejected without modifying output");require(parseMac("02:aa:BB:00:11:22",out),"valid unicast MAC");require(!parseMac("ff:ff:ff:ff:ff:ff",out),"multicast rejected");require(!validNetwork("","")&&!validNetwork("sensor","short"),"bad AP settings rejected");require(validNetwork("sensor",""),"intentional open AP allowed");}},
 {"checked-transaction",[]{FakeIo io;Vec3 out{9,9,9};io.burstOk=false;require(readAccel(io,out)==ReadStatus::TransportError&&out.x==9,"failed actual burst cannot produce valid sample");io.burstOk=true;io.status=0;require(readAccel(io,out)==ReadStatus::NoNewData&&io.bursts==1,"no data-ready means no stale burst");io.status=1;require(readAccel(io,out)==ReadStatus::Fresh&&out.z>.99f&&out.z<1.01f,"checked burst units are g");}},

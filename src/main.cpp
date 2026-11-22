@@ -10,13 +10,18 @@
 #include <esp_partition.h>
 #include <GyverDBFile.h>
 #include <SettingsGyver.h>
-#include <EncButton.h>
+#include <driver/gpio.h>
+#include <soc/soc_caps.h>
+#if SOC_RTCIO_INPUT_OUTPUT_SUPPORTED
+#include <driver/rtc_io.h>
+#endif
 #include "BoardProfile.h"
 #include "ImuDriver.h"
 #include "SensorCore.h"
 #include "CsvBuffer.h"
 #include "ConfigDatabase.h"
 #include "ImuSession.h"
+#include "PowerButton.h"
 #include "MobileUi.h"
 #include "../shared/StartupRadio.h"
 
@@ -26,7 +31,8 @@ struct __attribute__((packed)) BitePacket {char rodName[16];uint8_t eventType,ba
 static_assert(sizeof(BitePacket)==22,"Hub wire compatibility");
 bite::ConfigDatabase<GyverDBFile> db(&LittleFS,"/config.db");
 SettingsGyver sett("Fishing Bite Sensor - bench",&db);
-Button button(board::button);
+bite::PowerButton button;
+bite::LowBatteryGuard lowBattery;
 ImuDriver imu;
 bite::SensorCore sensor;
 bite::ImuSession imuSession;
@@ -38,7 +44,7 @@ bite::StateClock apClock,disarmedClock;
 bool storageOK=false,pwmOK=false,showDetails=false;
 bool apActive=true,radioReady=false,radioEn=false,csv=false,armUi=false;
 bool saveConfig=false,calRequest=false,testRequest=false,networkRequest=false;
-bool shutdownPending=false,sleepAttempted=false;
+bool sleepAttempted=false;
 uint8_t page=0,language=0,mode=0;
 uint16_t pulseMs=120,volume=100,greenLevel=100,redLevel=100;
 String sensorName="BiteSensor",apPassword="",hubAddress="";
@@ -50,11 +56,12 @@ startup::Ring<startup::Message,4> controlInbox;portMUX_TYPE controlMux=portMUX_I
 uint32_t controlTx=0,controlRx=0;char serialCommand[48]{};size_t serialLength=0;bool serialOverflow=false;
 uint32_t lastBattery=0,lastRate=0,rateSamples=0;
 uint32_t pulseCount=0,readErrors=0,noNew=0,csvDrops=0,sendErrors=0,saveNonce=0;
-uint32_t rebootAt=0,shutdownAt=0;
+uint32_t rebootAt=0;
 float sampleRate=0,vbat=0;int batteryPct=0;
 std::atomic<uint32_t> txSuccess{0},txFail{0};
-bool powerPrev=true,powerStable=true,powerReleased=false;
-uint32_t powerChanged=0,powerPressedAt=0;
+// Survive deep sleep (RTC slow memory); reported by the USB "status" command.
+RTC_DATA_ATTR uint32_t rtcSleeps=0,rtcShortWakes=0;RTC_DATA_ATTR char rtcLastSleep[12]="none";
+const char* wakeName="reset";
 const char* tr(const char* en,const char* ru){return language?ru:en;}
 
 namespace ui {
@@ -145,12 +152,13 @@ void serviceRegistration(uint32_t now){
   if(esp_now_send(peerMac,reinterpret_cast<const uint8_t*>(&packet),sizeof(packet))==ESP_OK)++controlTx;else ++sendErrors;
  }
 }
-void serviceSerial(){
+bool enterSleep(const char* reason,bool force,uint32_t now);
+void serviceSerial(uint32_t now){
  unsigned consumed=0;while(Serial.available()&&consumed++<64){char ch=char(Serial.read());
   if(ch=='\r'||ch=='\n'){
    serialCommand[serialLength]=0;
    if(serialOverflow)Serial.println("SENSOR error: command too long");
-   else if(!std::strcmp(serialCommand,"status"))Serial.printf("SENSOR status radio=%u registered=%u attempts=%u node=%u control_rx=%lu control_tx=%lu state=%s imu=%u\n",radioReady,registration.confirmed(),registration.attempts(),registration.node(),(unsigned long)controlRx,(unsigned long)controlTx,bite::stateName(sensor.state()),sensor.healthy());
+   else if(!std::strcmp(serialCommand,"status"))Serial.printf("SENSOR status radio=%u registered=%u attempts=%u node=%u control_rx=%lu control_tx=%lu state=%s imu=%u board=%s wake=%s sleeps=%lu short_wakes=%lu last_sleep=%s button=%u vbat=%.2f\n",radioReady,registration.confirmed(),registration.attempts(),registration.node(),(unsigned long)controlRx,(unsigned long)controlTx,bite::stateName(sensor.state()),sensor.healthy(),board::name,wakeName,(unsigned long)rtcSleeps,(unsigned long)rtcShortWakes,rtcLastSleep,digitalRead(board::button)==LOW,vbat);
    else if(!std::strcmp(serialCommand,"register")){
     if(sensor.desiredArmed())Serial.println("SENSOR error: disarm before register");
     else if(!radioReady)Serial.println("SENSOR error: radio disabled");
@@ -164,7 +172,12 @@ void serviceSerial(){
      if(flushSettings()){hubAddress=serialCommand+5;radioEn=true;draftMac=hubAddress;draftRadio=true;reconcileRadio();Serial.println("SENSOR peer saved; radio enabled");}
      else {db.set(kk::hubMac,hubAddress);db.set(kk::espNowEn,radioEn);Serial.println("SENSOR error: peer save failed; live configuration unchanged");}
     }
-   }else if(serialLength)Serial.println("SENSOR commands: status, register, peer AA:BB:CC:DD:EE:FF (disarmed only)");
+   }else if(!std::strcmp(serialCommand,"sleep")){
+    if(sensor.desiredArmed())Serial.println("SENSOR error: disarm before sleep");
+    else if(!enterSleep("serial",false,now))Serial.printf("SENSOR sleep refused: %s\n",sleepNotice.c_str());
+   }else if(serialLength)Serial.println("SENSOR commands: status, register, sleep, peer AA:BB:CC:DD:EE:FF (disarmed only)");
+   // same timestamp as the idle check in loop(): a later millis() would wrap elapsed()
+   if(serialLength)disarmedClock.enter(now);
    serialLength=0;serialOverflow=false;
   }else if(serialLength+1<sizeof(serialCommand))serialCommand[serialLength++]=ch;else serialOverflow=true;
  }
@@ -278,31 +291,41 @@ void update(sets::Updater& u){
     u.update(ui::radioDetails,radioNotice+" TX="+String(txSuccess.load(std::memory_order_relaxed))+" fail="+String(txFail.load(std::memory_order_relaxed)+sendErrors));u.update(ui::message,notice);
 }
 
-void attemptSleep(uint32_t now){
-    sleepAttempted=true;
-    if(!board::wakeAllowed()){sleepNotice=tr("Deep sleep blocked: D6 is not wake-capable; wiring unchanged","Глубокий сон запрещён: D6 не поддерживает пробуждение; схема не изменена");Serial.println(sleepNotice);return;}
-    if(!flushSettings()){sleepNotice="Sleep blocked: storage flush failed";return;}
+bool armWake(){
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);esp_err_t result=ESP_ERR_INVALID_ARG;
+    gpio_num_t pin=gpio_num_t(board::button);
 #if CONFIG_IDF_TARGET_ESP32C3
+    // Low-level GPIO wake; the sleep driver enables the internal pull-up of a wake pin.
+    gpio_pullup_en(pin);gpio_pulldown_dis(pin);
     result=esp_deep_sleep_enable_gpio_wakeup(1ULL<<board::button,ESP_GPIO_WAKEUP_GPIO_LOW);
 #elif CONFIG_IDF_TARGET_ESP32C6
     result=esp_sleep_enable_ext1_wakeup(1ULL<<board::button,ESP_EXT1_WAKEUP_ANY_LOW);
 #else
-    result=esp_sleep_enable_ext0_wakeup(gpio_num_t(board::button),0);
+    result=esp_sleep_enable_ext0_wakeup(pin,0);
 #endif
-    if(result!=ESP_OK){sleepNotice="Sleep blocked: wake API rejected pin";return;}
-    stopOutputs();applyOutputs(now);radioEnd();esp_deep_sleep_start();
+#if SOC_RTCIO_INPUT_OUTPUT_SUPPORTED && !CONFIG_IDF_TARGET_ESP32C3
+    // The bench has no external pull-up; v4 also has R3 10k.
+    if(result==ESP_OK){rtc_gpio_pullup_en(pin);rtc_gpio_pulldown_dis(pin);}
+#endif
+    return result==ESP_OK;
 }
-void handlePower(uint32_t now){
-    bool raw=digitalRead(board::powerButton);
-    if(raw!=powerPrev){powerPrev=raw;powerChanged=now;}
-    if(raw!=powerStable&&bite::elapsed(now,powerChanged)>=50){powerStable=raw;if(!raw)powerPressedAt=now;}
-    if(powerStable)powerReleased=true;
-    if(powerReleased&&!powerStable&&bite::elapsed(now,powerPressedAt)>=3000&&!shutdownPending){
-        stopOutputs();sensor.setArmed(false,now);flushSettings();shutdownPending=true;shutdownAt=now;notice="Power release requested";
-    }
-    if(shutdownPending&&bite::elapsed(now,shutdownAt)>=100){digitalWrite(board::power,LOW);}
-    // Under USB the latch may not cut power. Stay disarmed and keep feeding watchdog.
+// force: button / low battery always sleep; idle and serial sleep wait for a successful settings flush.
+bool enterSleep(const char* reason,bool force,uint32_t now){
+    sleepAttempted=true;
+    if(!board::wakeAllowed()){sleepNotice=tr("Deep sleep blocked: button pin cannot wake this board","Глубокий сон запрещён: вывод кнопки не будит эту плату");return false;}
+    if(!button.released()){sleepAttempted=false;sleepNotice=tr("Sleep postponed: button is pressed","Сон отложен: кнопка нажата");return false;}
+    if(sensor.desiredArmed()){sensor.setArmed(false,now);armUi=false;db.set(kk::armedSw,false);}
+    bool saved=flushSettings();
+    if(!saved&&!force){sleepNotice=tr("Sleep postponed: settings save failed","Сон отложен: ошибка записи настроек");return false;}
+    if(!armWake()){sleepNotice="Sleep blocked: wake API rejected pin";return false;}
+    stopOutputs();applyOutputs(now);
+    if(pwmOK){ledcWriteChannel(0,0);ledcWriteChannel(1,0);ledcWriteChannel(2,0);}
+    imu.powerDown();
+    radioEnd();WiFi.softAPdisconnect(true);WiFi.mode(WIFI_OFF);
+    std::strncpy(rtcLastSleep,reason,sizeof(rtcLastSleep)-1);rtcLastSleep[sizeof(rtcLastSleep)-1]=0;++rtcSleeps;
+    Serial.printf("SENSOR sleep reason=%s saved=%u; hold the button 1 s to wake\n",reason,saved);Serial.flush();delay(30);
+    esp_deep_sleep_start();
+    return false;
 }
 
 bool mountStorage(){
@@ -322,28 +345,43 @@ bool mountStorage(){
 }
 
 void setup(){
-    pinMode(board::power,OUTPUT);digitalWrite(board::power,HIGH);pinMode(board::powerButton,INPUT_PULLUP);
-    pinMode(board::button,INPUT_PULLUP);button.setHoldTimeout(1000);pinMode(board::battery,INPUT);
+    pinMode(board::button,INPUT_PULLUP);
+    auto cause=esp_sleep_get_wakeup_cause();
+    bool buttonWake=cause==ESP_SLEEP_WAKEUP_GPIO||cause==ESP_SLEEP_WAKEUP_EXT0||cause==ESP_SLEEP_WAKEUP_EXT1;
+    wakeName=buttonWake?"button":cause==ESP_SLEEP_WAKEUP_UNDEFINED?"reset":"other";
+    if(buttonWake){
+        // Before radio/IMU start: a short touch goes straight back to sleep.
+        bite::WakeConfirm confirm;confirm.begin(millis());bite::WakeResult r;
+        while((r=confirm.update(digitalRead(board::button)==LOW,millis()))==bite::WakeResult::Waiting)delay(5);
+        if(r==bite::WakeResult::Rejected&&armWake()){++rtcShortWakes;++rtcSleeps;esp_deep_sleep_start();}
+    }
+    pinMode(board::battery,INPUT);
     Serial.begin(115200);sensorBoot=esp_random();if(!sensorBoot)sensorBoot=1;setCpuFrequencyMhz(80);initOutputs();
     analogReadResolution(12);analogSetPinAttenuation(board::battery,ADC_11db);
     storageOK=mountStorage();if(storageOK)storageOK=db.begin();
     if(!storageOK)notice="Storage error; RAM settings only (not formatting existing data)";
     loadConfig();Wire.begin(board::sda,board::scl);Wire.setClock(400000);Wire.setTimeOut(20);
     uint32_t now=millis();imuSession.begin(imu,sensor,now);now=millis();enterConfig(now);reconcileRadio();disarmedClock.enter(now);
-    sleepNotice=board::wakeAllowed()?"Wake pin accepted; power latch still requires hardware test":"D6 cannot deep-wake this board: automatic deep sleep disabled";
+    sleepNotice=board::wakeAllowed()?tr("Deep sleep: hold button 3 s; wake: hold 1 s","Сон: удержать кнопку 3 с; пробуждение: удержать 1 с"):tr("Button pin cannot deep-wake this board: sleep disabled","Вывод кнопки не будит эту плату: сон отключён");
     sett.setCustom(benchMobileJs,strlen_P(benchMobileJs));
     sett.begin();sett.onBuild(build);sett.onUpdate(update);
-    updateBattery();lastBattery=lastRate=now;powerStable=powerPrev=digitalRead(board::powerButton);powerChanged=now;
+    updateBattery();lastBattery=lastRate=now;button.begin(digitalRead(board::button)==LOW,millis());
+    if(buttonWake)beep.start(millis(),150);
     esp_task_wdt_config_t wc={.timeout_ms=30000,.idle_core_mask=0,.trigger_panic=true};
     if(esp_task_wdt_reconfigure(&wc)==ESP_ERR_INVALID_STATE)esp_task_wdt_init(&wc);
     esp_task_wdt_add(nullptr);
-    Serial.println("Bite sensor bench: XIAO, checked LSM6DS3, dynamic/legacy, no field guarantee");
+    Serial.printf("Bite sensor %s: XIAO, checked LSM6DS3, dynamic/legacy, wake=%s, no field guarantee\n",board::name,wakeName);
 }
 void loop(){
     esp_task_wdt_reset();sett.tick();uint32_t now=millis();
-    button.tick();if(button.hold())setArmed(!sensor.desiredArmed(),now);
-    serviceSerial();serviceRegistration(now);
-    handlePower(now);if(shutdownPending){stopOutputs();applyOutputs(now);return;}
+    switch(button.update(digitalRead(board::button)==LOW,now)){
+        case bite::ButtonAction::ArmCue:beep.start(now,60);break;
+        case bite::ButtonAction::SleepCue:beep.start(now,400);break;
+        case bite::ButtonAction::ToggleArm:setArmed(!sensor.desiredArmed(),now);break;
+        case bite::ButtonAction::Sleep:enterSleep("button",true,now);break;
+        default:break;
+    }
+    serviceSerial(now);serviceRegistration(now);
     if(saveConfig){saveConfig=false;persistConfig();}
     if(networkRequest){networkRequest=false;uint8_t parsed[6];draftName.trim();
         if(!bite::validNetwork(draftName.c_str(),draftPass.c_str())||(draftRadio&&!bite::parseMac(draftMac.c_str(),parsed))){notice=tr("Invalid AP credentials or hub MAC; nothing applied","Неверное имя/пароль AP или MAC; изменения не применены");}
@@ -374,12 +412,14 @@ void loop(){
     }
     armUi=sensor.desiredArmed();
     if(sensor.desiredArmed()&&apActive&&apClock.expired(now,120000)){WiFi.softAPdisconnect(false);WiFi.mode(WIFI_STA);apActive=false;}
-    if(state==bite::State::Disarmed&&!sensor.desiredArmed()&&!csv&&!sleepAttempted&&disarmedClock.expired(now,180000)&&WiFi.softAPgetStationNum()==0)attemptSleep(now);
+    if(state==bite::State::Disarmed&&!sensor.desiredArmed()&&!csv&&!sleepAttempted&&disarmedClock.expired(now,180000)&&WiFi.softAPgetStationNum()==0)enterSleep("idle",false,now);
     if(bite::elapsed(now,lastRate)>=1000){sampleRate=(sensor.telemetry().samples-rateSamples)*1000.f/bite::elapsed(now,lastRate);rateSamples=sensor.telemetry().samples;lastRate=now;}
     static uint32_t lastLowAttempt=0;static bool lowSeen=false;
     if(bite::elapsed(now,lastBattery)>=5000){lastBattery=now;updateBattery();
         if(batteryPct>25)lowSeen=false;
-        if(startup::batteryKnown(vbat)&&sensor.desiredArmed()&&batteryPct<=20&&(!lowSeen||bite::elapsed(now,lastLowAttempt)>=60000)){lastLowAttempt=now;lowSeen=sendPacket(3);}}
+        if(startup::batteryKnown(vbat)&&sensor.desiredArmed()&&batteryPct<=20&&(!lowSeen||bite::elapsed(now,lastLowAttempt)>=60000)){lastLowAttempt=now;lowSeen=sendPacket(3);}
+        // Cell protection: three readings below 3.30 V -> tell the hub (if armed) and sleep.
+        if(lowBattery.update(startup::batteryKnown(vbat),vbat)){if(sensor.desiredArmed())sendPacket(3);delay(50);enterSleep("battery",true,now);}}
     if(state==bite::State::Fault||state==bite::State::Calibrating||state==bite::State::MotionSuppressed||state==bite::State::Settling)alarmPulse.stop();
     auto calibration=sensor.calibration();
     if(calibration==bite::Calibration::Success&&previousCalibration!=calibration){

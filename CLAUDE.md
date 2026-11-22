@@ -6,7 +6,7 @@ Guidance for coding agents working in this repository. Read `.autopilot/PROGRESS
 
 This is a two-device ESP-NOW fishing-rod motion sensor system. The current software release is a **bench candidate**, not a field-validated bite detector. The existing sensor bench uses Seeed XIAO ESP32-C3 + LSM6DS3; the planned sensor board is Seeed XIAO ESP32-S3. The hub uses a SH1106 OLED.
 
-The detector baseline is `1b8c6b6`; current HU02 two-role firmware is `9916cf0`. Independent clean-clone checks passed 29 sensor tests, 36 hub tests (ASan/UBSan), four C3/S3 builds and eight actual-renderer frames. Both identified physical XIAO C3 roles were flashed with verified data and no backups as authorized. Startup radio registration and healthy sensor IMU/DISARMED status were observed. Field bite accuracy, actual motor vibration, RF range, battery charging and 48-hour endurance remain unvalidated.
+The detector baseline is `1b8c6b6`; current HU02 two-role firmware is `9916cf0`. Independent clean-clone checks passed 29 sensor tests, 36 hub tests (ASan/UBSan), four C3/S3 builds and eight actual-renderer frames. Both identified physical XIAO C3 roles were flashed with verified data and no backups as authorized. Startup radio registration and healthy sensor IMU/DISARMED status were observed. Field bite accuracy, actual motor vibration, RF range, battery charging and 48-hour endurance remain unvalidated. Deep-sleep work of 2026-11-22 (not yet committed): 37 sensor host tests, C3/S3/C6/`bite_v4_s3` builds, bench C3 sensor flashed and button sleep/wake/idle-sleep checked over USB.
 
 ## Commands
 
@@ -20,6 +20,7 @@ python3 tools/run_host_tests.py
 pio run -e xiao_esp32c3
 pio run -e seeed_xiao_esp32s3
 pio run -e xiao_esp32c6
+pio run -e bite_v4_s3      # PCB v4 pin profile
 
 # Storage integration needs the actual library installed by the C3 build
 python3 tests/test_storage_integration.py
@@ -53,7 +54,8 @@ pio run -d ESP_HUB -e xiao_esp32c3 -e seeed_xiao_esp32s3
 - `include/ImuDriver.h`, `include/ImuRead.h`: LSM6DS3 initialization and checked, fresh XYZ burst reads.
 - `include/ImuSession.h`: first-frame timeout and bounded reinitialization lifecycle.
 - `include/ConfigDatabase.h`: guards automatic, explicit, and destructor writes after an existing database fails to load.
-- `include/BoardProfile.h`: unchanged D-pin assignments and wake eligibility.
+- `include/BoardProfile.h`: bench and PCB v4 (`BITE_BOARD_V4`) pin profiles and wake eligibility.
+- `include/PowerButton.h`: single-button ARM/sleep gesture, wake confirmation, low-battery guard (host-tested).
 - `include/CsvBuffer.h`: bounded nonblocking CSV buffering.
 - `tests/` and `tools/`: production-core regressions, actual storage integration, and replay tools.
 - `docs/bench-testing.md`: wiring, calibration, configuration, capture, upload instructions, and physical checks.
@@ -66,7 +68,7 @@ pio run -d ESP_HUB -e xiao_esp32c3 -e seeed_xiao_esp32s3
 - Motion suppression returns through SETTLING to ARMED in a stable **new** position. Manual DISARMED and an IMU FAULT never silently auto-arm. Recovery from an IMU fault requires calibration and an explicit ARM.
 - First-frame wait is bounded to 150 ms; reinitialization retries are spaced by 2000 ms. Time calculations must remain safe across uint32 rollover.
 - Keep output timeout servicing independent of detector early returns. A documented passive buzzer uses a 3 kHz carrier; maximum level maps to 50% duty, not DC.
-- The current ARM button is D6, which cannot provide the configured deep-sleep wake on the declared XIAO C3/C6/S3 boards. Sleep is deliberately blocked with a visible reason. Do not pick a different GPIO without the actual circuit and physical rewiring.
+- One active-LOW button on D1 does ARM (hold 1–3 s), deep sleep (hold ≥3 s, sleeps on release) and wake (hold ~1 s; shorter touches go straight back to sleep). The user physically moved the bench button from D6 to D1 on 2026-11-22; D0 latch and D6 are unused. Gesture, wake confirmation and the 3.30 V low-battery guard live in portable `include/PowerButton.h`. Idle sleep: DISARMED 3 min with no button/USB command/AP client/CSV. Timestamps passed to `disarmedClock.enter()` inside `loop()` must be the loop's `now`, never a later `millis()` (elapsed() wrap caused instant sleep once). PCB v4 uses env `bite_v4_s3` (`BITE_BOARD_V4` pin profile). Sleep/wake verified on the bench C3 over USB only; sleep current and battery operation are unmeasured.
 - Native USB CDC avoids sharing UART D6/D7 with the button/LED. Preserve that routing when changing logging.
 - Preserve `/config.db`. A failed load of an existing database must leave its bytes intact and disable all automatic/manual writes. Do not format a nonempty filesystem to hide an error; saved settings must not be claimed when only RAM changes succeeded.
 - CSV records fresh samples through a 2048-byte buffer; overflow drops whole lines and is counted. Flash is not written per sample. Replay uses a fixed calibration/ARM schedule, not a full reconstruction of past UI/radio actions.

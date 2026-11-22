@@ -25,5 +25,7 @@ public:
         return read(0x10,&accel,1)&&read(0x11,&gyro,1)&&(accel&0xfc)==0x40&&(gyro&0xf0)==0;
     }
     bite::ReadStatus sample(bite::Vec3& a){return bite::readAccel(*this,a);}
+    // Before deep sleep: accelerometer ODR to power-down (gyro is already off). begin() restores it.
+    bool powerDown(){return write(0x10,0x00);}
     uint8_t address()const{return address_;}
 };
