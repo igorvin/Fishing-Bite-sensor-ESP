@@ -1,0 +1,26 @@
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 900 380' width='900' height='380'>
+<defs><marker id='a' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='8' markerHeight='8' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#3b4752'/></marker></defs>
+<rect width='900' height='380' rx='18' fill='#ffffff'/>
+<text x='450' y='42' font-size='21' font-weight='700' fill='#1f2933' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='450' dy='0'>One button: ARM, sleep and wake</tspan></text>
+<rect x='60' y='70' width='230' height='54' fill='#eef1f4'/>
+<rect x='290' y='70' width='270' height='54' fill='#eaf5ea'/>
+<rect x='560' y='70' width='280' height='54' fill='#e8f0fb'/>
+<rect x='60' y='70' width='780' height='54' fill='none' stroke='#3b4752' stroke-width='2' rx='4'/>
+<text x='175.0' y='103' font-size='22' font-weight='700' fill='#52606d' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='175.0' dy='0'>…</tspan></text>
+<text x='425.0' y='104' font-size='18' font-weight='700' fill='#1e7b23' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='425.0' dy='0'>ARM / DISARM</tspan></text>
+<text x='700.0' y='104' font-size='18' font-weight='700' fill='#2f6fb3' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='700.0' dy='0'>SLEEP</tspan></text>
+<line x1='60' y1='64' x2='60' y2='136' stroke='#3b4752' stroke-width='2'/>
+<text x='60' y='156' font-size='14' font-weight='700' fill='#1f2933' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='60' dy='0'>press</tspan></text>
+<line x1='290' y1='64' x2='290' y2='136' stroke='#3b4752' stroke-width='2'/>
+<text x='290' y='156' font-size='14' font-weight='700' fill='#1f2933' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='290' dy='0'>1 s</tspan></text>
+<line x1='560' y1='64' x2='560' y2='136' stroke='#3b4752' stroke-width='2'/>
+<text x='560' y='156' font-size='14' font-weight='700' fill='#1f2933' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='560' dy='0'>3 s</tspan></text>
+<text x='175.0' y='188' font-size='14' font-weight='400' fill='#52606d' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='175.0' dy='0'>too short —</tspan><tspan x='175.0' dy='18.2'>nothing happens</tspan></text>
+<text x='425.0' y='188' font-size='14' font-weight='400' fill='#1f2933' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='425.0' dy='0'>short beep at 1 s</tspan><tspan x='425.0' dy='18.2'>release → ARM / DISARM</tspan></text>
+<text x='700.0' y='188' font-size='14' font-weight='400' fill='#1f2933' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='700.0' dy='0'>long beep at 3 s</tspan><tspan x='700.0' dy='18.2'>release → deep sleep</tspan></text>
+<rect x='60' y='252' width='780' height='106' rx='14' fill='#f7f8fa' stroke='#c5ccd3' stroke-width='2'/>
+<text x='80' y='282' font-size='16' font-weight='700' fill='#1f2933' text-anchor='start' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='80' dy='0'>While sleeping</tspan></text>
+<text x='80' y='308' font-size='14' font-weight='400' fill='#1f2933' text-anchor='start' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='80' dy='0'>• touch &lt; 1 s → goes back to sleep</tspan></text>
+<text x='80' y='330' font-size='14' font-weight='400' fill='#1f2933' text-anchor='start' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='80' dy='0'>• hold ≈ 1 s → wakes up (beep), calibrates, DISARMED</tspan></text>
+<text x='80' y='352' font-size='13' font-weight='400' fill='#52606d' text-anchor='start' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='80' dy='0'>• Also sleeps by itself: 3 min DISARMED and idle, or battery below 3.30 V</tspan></text>
+</svg>

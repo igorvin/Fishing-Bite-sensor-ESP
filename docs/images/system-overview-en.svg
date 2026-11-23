@@ -1,0 +1,31 @@
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 900 400' width='900' height='400'>
+<defs><marker id='a' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='8' markerHeight='8' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#3b4752'/></marker></defs>
+<rect width='900' height='400' rx='18' fill='#ffffff'/>
+<rect x='40' y='40' width='260' height='200' rx='14' fill='#eaf5ea' stroke='#37a93c' stroke-width='2'/>
+<text x='170' y='78' font-size='20' font-weight='700' fill='#1f2933' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='170' dy='0'>Bite sensor</tspan></text>
+<text x='170' y='100' font-size='14' font-weight='400' fill='#52606d' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='170' dy='0'>on the rod</tspan></text>
+<text x='170' y='138' font-size='15' font-weight='400' fill='#1f2933' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='170' dy='0'>LSM6DS3 accelerometer</tspan></text>
+<text x='170' y='164' font-size='15' font-weight='400' fill='#1f2933' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='170' dy='0'>XIAO ESP32-C3 / S3</tspan></text>
+<text x='170' y='190' font-size='15' font-weight='400' fill='#1f2933' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='170' dy='0'>LEDs · buzzer · button</tspan></text>
+<circle cx='140' cy='218' r='7' fill='#37a93c'/>
+<circle cx='162' cy='218' r='7' fill='#cb2839'/>
+<circle cx='190' cy='218' r='9' fill='#3b4752'/>
+<rect x='600' y='40' width='260' height='200' rx='14' fill='#e8f0fb' stroke='#2f6fb3' stroke-width='2'/>
+<text x='730' y='78' font-size='20' font-weight='700' fill='#1f2933' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='730' dy='0'>Hub (receiver)</tspan></text>
+<text x='730' y='100' font-size='14' font-weight='400' fill='#52606d' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='730' dy='0'>next to you</tspan></text>
+<rect x='665' y='118' width='130' height='56' rx='4' fill='#111'/>
+<text x='730' y='140' font-size='12' font-weight='700' fill='#fff' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='730' dy='0'>BITE</tspan></text>
+<text x='730' y='164' font-size='18' font-weight='700' fill='#fff' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='730' dy='0'>FEEDER</tspan></text>
+<text x='730' y='200' font-size='14' font-weight='400' fill='#1f2933' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='730' dy='0'>SH1106 OLED 128×64</tspan></text>
+<text x='730' y='222' font-size='14' font-weight='400' fill='#1f2933' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='730' dy='0'>vibration motor · LED</tspan></text>
+<line x1='305' y1='120' x2='592' y2='120' stroke='#3b4752' stroke-width='3' stroke-dasharray='8 6' marker-end='url(#a)'/>
+<text x='450' y='105' font-size='17' font-weight='700' fill='#1f2933' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='450' dy='0'>ESP-NOW radio</tspan></text>
+<text x='450' y='145' font-size='14' font-weight='400' fill='#52606d' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='450' dy='0'>bite · motion · low battery</tspan></text>
+<text x='450' y='175' font-size='13' font-weight='400' fill='#52606d' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='450' dy='0'>up to 8 sensors per hub</tspan></text>
+<text x='450' y='195' font-size='13' font-weight='400' fill='#52606d' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='450' dy='0'>no router or Internet needed</tspan></text>
+<rect x='95' y='290' width='150' height='80' rx='14' fill='#fdf3e3' stroke='#d98e04' stroke-width='2'/>
+<text x='170' y='323' font-size='18' font-weight='700' fill='#1f2933' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='170' dy='0'>Phone</tspan></text>
+<text x='170' y='347' font-size='14' font-weight='400' fill='#52606d' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='170' dy='0'>settings</tspan></text>
+<line x1='170' y1='286' x2='170' y2='246' stroke='#3b4752' stroke-width='3' marker-start='url(#a)' marker-end='url(#a)'/>
+<text x='190' y='262' font-size='14' font-weight='400' fill='#1f2933' text-anchor='start' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'><tspan x='190' dy='0'>Wi-Fi access point  ·  http://192.168.4.1</tspan></text>
+</svg>
