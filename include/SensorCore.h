@@ -47,10 +47,14 @@ enum class State:uint8_t {Disarmed,Settling,Armed,MotionSuppressed,Fault,Calibra
 inline const char* stateName(State s){switch(s){case State::Disarmed:return "DISARMED";case State::Settling:return "SETTLING";case State::Armed:return "ARMED";case State::MotionSuppressed:return "SUPPRESSED";case State::Fault:return "FAULT";case State::Calibrating:return "CALIBRATING";}return "FAULT";}
 enum class Calibration:uint8_t {None,Running,Success,Moving,SensorError};
 inline const char* calibrationName(Calibration c){switch(c){case Calibration::None:return "not calibrated";case Calibration::Running:return "keep still";case Calibration::Success:return "success";case Calibration::Moving:return "rejected: movement";case Calibration::SensorError:return "rejected: sensor error";}return "error";}
+// Why the last calibration was rejected as movement (diagnostics only; limits unchanged).
+enum class CalReject:uint8_t {None,Magnitude,Deviation,Noise};
+inline const char* calRejectName(CalReject r){switch(r){case CalReject::None:return "none";case CalReject::Magnitude:return "magnitude";case CalReject::Deviation:return "deviation";case CalReject::Noise:return "noise";}return "none";}
 struct Telemetry {
     Vec3 accel{};Signal signal{};float noiseG=0,effectiveG=.02f;
     uint32_t samples=0,errors=0,gaps=0,events=0,suppressedMs=0,lastSampleMs=0;
     uint8_t event=0,calibrationProgress=0;
+    CalReject calReject=CalReject::None;float calRejectValue=0;
 };
 class Pulse {
     bool on_=false;uint32_t start_=0,duration_=0;
@@ -95,6 +99,7 @@ public:
     bool beginCalibration(uint32_t now){
         if(!healthy_)return false;
         cal_=Calibration::Running;calAt_=now;calCount_=0;calFirst_=t_.accel;mean_={0,0,0};m2_={0,0,0};
+        t_.calReject=CalReject::None;t_.calRejectValue=0;
         t_.calibrationProgress=0;transition(State::Calibrating,now);return true;
     }
     void fault(uint32_t now){
@@ -126,10 +131,12 @@ public:
             mean_.x+=diff.x/n;mean_.y+=diff.y/n;mean_.z+=diff.z/n;
             m2_.x+=diff.x*(a.x-mean_.x);m2_.y+=diff.y*(a.y-mean_.y);m2_.z+=diff.z*(a.z-mean_.z);
             t_.calibrationProgress=uint8_t(std::min<uint32_t>(100u,elapsed(now,calAt_)*100/2000));
-            if(okMagnitude<.85f||okMagnitude>1.15f||magnitude(a-calFirst_)>.035f){rejectCalibration(Calibration::Moving,now);return 0;}
+            float deviation=magnitude(a-calFirst_);
+            if(okMagnitude<.85f||okMagnitude>1.15f){t_.calReject=CalReject::Magnitude;t_.calRejectValue=okMagnitude;rejectCalibration(Calibration::Moving,now);return 0;}
+            if(deviation>.035f){t_.calReject=CalReject::Deviation;t_.calRejectValue=deviation;rejectCalibration(Calibration::Moving,now);return 0;}
             if(elapsed(now,calAt_)>=2000&&calCount_>=100){
                 float noise=std::sqrt((m2_.x+m2_.y+m2_.z)/float(calCount_-1));
-                if(!std::isfinite(noise)||noise>.015f){rejectCalibration(Calibration::Moving,now);return 0;}
+                if(!std::isfinite(noise)||noise>.015f){t_.calReject=CalReject::Noise;t_.calRejectValue=noise;rejectCalibration(Calibration::Moving,now);return 0;}
                 t_.noiseG=noise;cal_=Calibration::Success;calibrated_=true;t_.calibrationProgress=100;
                 features_.reset();base_=a;transition(wanted_?State::Settling:State::Disarmed,now);
             }

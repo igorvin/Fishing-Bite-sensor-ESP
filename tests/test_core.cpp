@@ -4,6 +4,9 @@
 #include "ConfigDatabase.h"
 #include "ImuSession.h"
 #include "PowerButton.h"
+#include "Feedback.h"
+#include "EventLog.h"
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -76,7 +79,7 @@ std::vector<std::pair<const char*,std::function<void()>>> tests={
   for(int i=0;i<150;++i){t+=10;b.update(true,t);}for(int i=0;i<10;++i){t+=10;toggles+=b.update(false,t)==ButtonAction::ToggleArm;}
   require(toggles==1,"hold timing spans millis rollover");}},
 {"wake-confirm",[]{WakeConfirm w;w.begin(0);WakeResult r=WakeResult::Waiting;uint32_t t=0;
-  for(;t<1000&&r==WakeResult::Waiting;t+=10)r=w.update(true,t);require(r==WakeResult::Waiting,"not confirmed before 1 s");
+  for(;t<1000&&r==WakeResult::Waiting;t+=10){r=w.update(true,t);}require(r==WakeResult::Waiting,"not confirmed before 1 s");
   r=w.update(true,1000);require(r==WakeResult::Confirmed,"held 1 s confirms");
   w.begin(0);r=w.update(true,0);for(t=300;t<400&&r==WakeResult::Waiting;t+=10)r=w.update(false,t);require(r==WakeResult::Rejected,"brief touch goes back to sleep");
   w.begin(0);w.update(true,500);require(w.update(false,510)==WakeResult::Waiting&&w.update(true,520)==WakeResult::Waiting&&w.update(true,1000)==WakeResult::Confirmed,"contact bounce tolerated");}},
@@ -89,6 +92,55 @@ std::vector<std::pair<const char*,std::function<void()>>> tests={
 {"calibration-fault",[]{SensorCore c;auto t=calibrate(c);c.beginCalibration(t);c.fault(t+10);require(c.calibration()==Calibration::SensorError&&!c.desiredArmed(),"fault rejects calibration and intent");}},
 {"csv-buffer-backpressure",[]{CsvBuffer<16> q;require(q.append("first\n",6),"enqueue full record");require(!q.append("too-long-record\n",16)&&q.size()==6,"overflow drops whole record");char out[16];require(q.peek(out,3)==3&&out[0]=='f',"partial drain");q.consume(3);require(q.append("second\n",7),"wrap-around enqueue");auto n=q.peek(out,16);require(std::string(out,n)=="st\nsecond\n","record order after wrap");}},
 {"persisted-noise-validation",[]{SensorCore c;require(c.restoreNoise(.01f)&&c.telemetry().noiseG==.01f,"restore noise result");require(!c.restoreNoise(.2f)&&c.telemetry().noiseG==.01f,"reject invalid noise without replacing");require(!c.calibrated()&&!c.setArmed(true,0),"stored noise alone never proves current IMU ready");}},
+{"calibration-reject-reason",[]{
+  SensorCore c;uint32_t t=1000;c.update({0,0,1},t);c.beginCalibration(t);t+=10;c.update({.05f,0,1},t);
+  require(c.calibration()==Calibration::Moving&&c.telemetry().calReject==CalReject::Deviation&&c.telemetry().calRejectValue>.049f&&c.telemetry().calRejectValue<.051f,"deviation from first sample is recorded with its size");
+  c.beginCalibration(t);require(c.telemetry().calReject==CalReject::None,"a new calibration clears the old reason");t+=10;c.update({0,0,.7f},t);
+  require(c.telemetry().calReject==CalReject::Magnitude,"out-of-range magnitude is recorded");
+  SensorCore n;t=1000;n.update({0,0,1},t);n.beginCalibration(t);for(int i=0;i<201;++i){t+=10;n.update({(i%2)?.03f:-.03f,0,1},t);}
+  require(n.calibration()==Calibration::Moving&&n.telemetry().calReject==CalReject::Noise&&n.telemetry().calRejectValue>.015f,"steady vibration is a noise rejection");}},
+{"button-arm-uncalibrated-reproduction",[]{
+  // Field report: after RESET the button would not arm, web ARM worked, then the button worked.
+  SensorCore c;Config cfg;c.configure(cfg);uint32_t t=1000;c.update({0,0,1},t);c.beginCalibration(t);
+  for(int i=0;i<20;++i){t+=10;c.update({.04f*(i%2),0,1},t);}
+  require(!c.calibrated()&&c.calibration()==Calibration::Moving,"touch during boot calibration rejects it");
+  require(c.setArmed(true,t)&&c.state()==State::Calibrating,"button ARM then needs a calibration");
+  for(int i=0;i<10;++i){t+=10;c.update({(i%2)?.05f:-.05f,0,1},t);}
+  require(!c.desiredArmed()&&c.state()==State::Disarmed,"release jiggle silently cancels that ARM (core behaviour kept)");
+  // ArmAssist: same button ARM, calibration starts only 1 s after release.
+  ArmAssist assist;assist.defer(t);require(!assist.due(t+500,true),"not before the settle delay");
+  require(!assist.due(t+900,false),"a press restarts the wait");require(!assist.due(t+1800,true),"wait counted from the last press");
+  require(assist.due(t+1900,true)&&!assist.pending(),"due once, after release + settle");for(int i=0;i<190;++i){t+=10;c.update({0,0,1},t);}
+  require(c.setArmed(true,t)&&c.state()==State::Calibrating,"deferred ARM starts calibration");
+  for(int i=0;i<201;++i){t+=10;c.update({0,0,1},t);}
+  for(int i=0;i<160;++i){t+=10;c.update({0,0,1},t);}
+  require(c.calibrated()&&c.state()==State::Armed,"untouched calibration then arms");}},
+{"boot-calibration-retry-bounded",[]{
+  ArmAssist a;a.rejected(1000);
+  require(!a.retryDue(2500,true,true),"no retry sooner than 2 s after rejection");
+  require(!a.retryDue(3000,true,false),"no retry while the button is pressed");
+  require(!a.retryDue(3000,false,true),"no retry when not eligible");
+  require(a.retryDue(3000,true,true)&&a.retries()==1,"first retry");
+  a.rejected(5000);require(a.retryDue(7000,true,true)&&a.retries()==2,"second retry");
+  a.rejected(9000);require(a.retryDue(11000,true,true)&&a.retries()==3,"third retry");
+  a.rejected(13000);require(!a.retryDue(20000,true,true),"bounded: at most three");
+  a.calibrated();a.rejected(UINT32_MAX-500);require(!a.retryDue(1000,true,true)&&a.retryDue(1500,true,true),"success resets the budget; rollover safe");}},
+{"armed-heartbeat-and-error-cue",[]{
+  require(Heartbeat::on(5000,5000)&&Heartbeat::on(5049,5000)&&!Heartbeat::on(5050,5000)&&!Heartbeat::on(5999,5000)&&Heartbeat::on(6000,5000),"50 ms flash once per second from entering ARMED");
+  uint32_t since=UINT32_MAX-20;require(Heartbeat::on(since,since)&&!Heartbeat::on(since+100,since)&&Heartbeat::on(since+1000,since),"phase survives millis rollover");
+  Pattern p;p.start(100,3,80,80);int on=0,edges=0;bool last=false;
+  for(uint32_t t=100;t<700;++t){bool x=p.tick(t);on+=x;edges+=x&&!last;last=x;}
+  require(on==240&&edges==3&&!p.active(),"three 80 ms beeps, then finished");}},
+{"event-log-ring-and-text",[]{
+  EventLog<4> log;for(uint8_t i=0;i<6;++i)log.add(i*10,Log::CalRetry,i,3);
+  require(log.size()==4&&log.total()==6&&log.at(0).a==2&&log.newest().a==5&&log.newest(3).a==2,"keeps the newest entries in order");
+  char line[160];LogEntry e{12345,Log::ArmCancelled,uint8_t(CalReject::Deviation),0,0,.05f};formatLog(e,line,sizeof(line));
+  require(std::strstr(line,"12.345s")&&std::strstr(line,"ARM cancelled")&&std::strstr(line,"moved 0.050 g")&&std::strstr(line,"limit 0.035"),"cancel explains the reason");
+  e=LogEntry{0,Log::Arm,uint8_t(Source::Web),1,uint8_t(State::Calibrating),0};formatLog(e,line,sizeof(line));
+  require(std::strstr(line,"ARM from web -> CALIBRATING"),"arm request shows source and result");
+  e=LogEntry{0,Log::Arm,uint8_t(Source::Button),1,Refused,0};formatLog(e,line,sizeof(line));require(std::strstr(line,"refused: IMU fault"),"refusal");
+  e=LogEntry{0,Log::Button,uint8_t(ButtonAction::ToggleArm),0,0,0};formatLog(e,line,sizeof(line));require(std::strstr(line,"toggle ARM"),"button action");
+  char tiny[8];int n=formatLog(e,tiny,sizeof(tiny));require(n>0&&std::strlen(tiny)==7,"truncates safely");}},
 {"timestamp-rollover",[]{SensorCore c;uint32_t t=UINT32_MAX-1000;c.update({0,0,1},t);c.beginCalibration(t);for(int i=0;i<201;++i){t+=10;c.update({0,0,1},t);}require(c.calibrated(),"calibration spans rollover");}}
 };
 int failures=0;for(auto& test:tests){try{test.second();std::printf("PASS: %s\n",test.first);}catch(const std::exception& e){++failures;std::fprintf(stderr,"FAIL: %s: %s\n",test.first,e.what());}}

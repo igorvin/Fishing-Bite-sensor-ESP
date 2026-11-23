@@ -23,6 +23,8 @@
 #include "ImuSession.h"
 #include "PowerButton.h"
 #include "MobileUi.h"
+#include "Feedback.h"
+#include "EventLog.h"
 #include "../shared/StartupRadio.h"
 
 // Keep original key hashes and 22-byte wire contract. New semantics use new keys.
@@ -38,6 +40,10 @@ bite::SensorCore sensor;
 bite::ImuSession imuSession;
 bite::Config draft;
 bite::Pulse alarmPulse,beep;
+bite::Pattern errorCue;
+bite::ArmAssist armAssist;
+bite::EventLog<32> journal;
+bite::State loggedState=bite::State::Fault;
 bite::CsvBuffer<2048> csvBuffer;
 bite::Calibration previousCalibration=bite::Calibration::None;
 bite::StateClock apClock,disarmedClock;
@@ -63,22 +69,30 @@ std::atomic<uint32_t> txSuccess{0},txFail{0};
 RTC_DATA_ATTR uint32_t rtcSleeps=0,rtcShortWakes=0;RTC_DATA_ATTR char rtcLastSleep[12]="none";
 const char* wakeName="reset";
 const char* tr(const char* en,const char* ru){return language?ru:en;}
+// Journal entries are printed live on USB, except during CSV capture (they would corrupt the stream).
+void note(uint32_t now,bite::Log type,uint8_t a=0,uint8_t b=0,uint8_t c=0,float v=0){
+    const auto& e=journal.add(now,type,a,b,c,v);
+    if(csv)return;char line[160];bite::formatLog(e,line,sizeof(line));Serial.printf("SENSOR log %s\n",line);
+}
 
 namespace ui {
 constexpr size_t menu=2000,lang=2001,arm=2002,algorithm=2003,threshold=2004,noise=2005,legacy=2006;
 constexpr size_t pulse=2007,period=2008,continuous=2009,suppress=2010,up=2011,tilt=2012,hold=2013;
 constexpr size_t vol=2014,green=2015,red=2016,name=2017,pass=2018,mac=2019,radio=2020,save=2021,cal=2022,test=2023,capture=2024;
-constexpr size_t state=2100,health=2101,xyz=2102,signals=2103,noiseInfo=2104,calInfo=2105,battery=2106,stats=2107,timing=2108,sleep=2109,radioInfo=2110,message=2111,details=2112,radioDetails=2113,batteryRaw=2114;
+constexpr size_t state=2100,health=2101,xyz=2102,signals=2103,noiseInfo=2104,calInfo=2105,battery=2106,stats=2107,timing=2108,sleep=2109,radioInfo=2110,message=2111,details=2112,radioDetails=2113,batteryRaw=2114,events=2115;
 }
 
-void stopOutputs(){alarmPulse.stop();beep.stop();}
+void stopOutputs(){alarmPulse.stop();beep.stop();errorCue.stop();}
 void applyOutputs(uint32_t now){
-    bool alarmOn=alarmPulse.tick(now),beepOn=beep.tick(now);
+    bool alarmOn=alarmPulse.tick(now),beepOn=beep.tick(now),cueOn=errorCue.tick(now);
+    bool armed=sensor.state()==bite::State::Armed;
+    // Red: alarm pulses and error cue; otherwise a short heartbeat flash every second while ARMED.
+    bool redOn=alarmOn||cueOn||(armed&&bite::Heartbeat::on(now,sensor.stateSince()));
     if(!pwmOK)return;
     // Passive buzzer: 100% volume maps to 50% carrier duty, never DC.
-    ledcWriteChannel(0,(alarmOn||beepOn)?(uint32_t(volume)*512u/100u):0);
-    ledcWriteChannel(1,sensor.state()==bite::State::Armed?uint32_t(greenLevel)*255/100:0);
-    ledcWriteChannel(2,alarmOn?uint32_t(redLevel)*255/100:0);
+    ledcWriteChannel(0,(alarmOn||beepOn||cueOn)?(uint32_t(volume)*512u/100u):0);
+    ledcWriteChannel(1,armed?uint32_t(greenLevel)*255/100:0);
+    ledcWriteChannel(2,redOn?uint32_t(redLevel)*255/100:0);
 }
 void initOutputs(){
     // Separate frequencies/resolutions force separate timers in the pinned core.
@@ -122,9 +136,10 @@ void enterConfig(uint32_t now){
     apActive=WiFi.softAP(sensorName.c_str(),apPassword.length()?apPassword.c_str():nullptr);
     WiFi.setSleep(true);apClock.enter(now);
 }
-void setArmed(bool value,uint32_t now){
-    stopOutputs();bool was=sensor.desiredArmed();
-    if(!sensor.setArmed(value,now)){armUi=false;notice=tr("Cannot arm: IMU fault","Нельзя включить охрану: ошибка IMU");return;}
+void setArmed(bool value,uint32_t now,bite::Source source){
+    stopOutputs();armAssist.cancel();bool was=sensor.desiredArmed();
+    if(!sensor.setArmed(value,now)){armUi=false;notice=tr("Cannot arm: IMU fault","Нельзя включить охрану: ошибка IMU");note(now,bite::Log::Arm,uint8_t(source),value,bite::Refused);return;}
+    note(now,bite::Log::Arm,uint8_t(source),value,uint8_t(sensor.state()));
     armUi=sensor.desiredArmed();db.set(kk::armedSw,armUi);
     if(value&&!was){apClock.enter(now);if(sensor.state()!=bite::State::Calibrating)beep.start(now,300);}
     if(!value){disarmedClock.enter(now);sleepAttempted=false;beep.start(now,120);enterConfig(now);}
@@ -153,12 +168,20 @@ void serviceRegistration(uint32_t now){
  }
 }
 bool enterSleep(const char* reason,bool force,uint32_t now);
+const char* calibrationCode(bite::Calibration c){
+    switch(c){case bite::Calibration::None:return "none";case bite::Calibration::Running:return "running";case bite::Calibration::Success:return "success";case bite::Calibration::Moving:return "rejected_movement";case bite::Calibration::SensorError:return "rejected_imu";}
+    return "none";
+}
 void serviceSerial(uint32_t now){
  unsigned consumed=0;while(Serial.available()&&consumed++<64){char ch=char(Serial.read());
   if(ch=='\r'||ch=='\n'){
    serialCommand[serialLength]=0;
    if(serialOverflow)Serial.println("SENSOR error: command too long");
-   else if(!std::strcmp(serialCommand,"status"))Serial.printf("SENSOR status radio=%u registered=%u attempts=%u node=%u control_rx=%lu control_tx=%lu state=%s imu=%u board=%s wake=%s sleeps=%lu short_wakes=%lu last_sleep=%s button=%u vbat=%.2f\n",radioReady,registration.confirmed(),registration.attempts(),registration.node(),(unsigned long)controlRx,(unsigned long)controlTx,bite::stateName(sensor.state()),sensor.healthy(),board::name,wakeName,(unsigned long)rtcSleeps,(unsigned long)rtcShortWakes,rtcLastSleep,digitalRead(board::button)==LOW,vbat);
+   else if(!std::strcmp(serialCommand,"status"))Serial.printf("SENSOR status radio=%u registered=%u attempts=%u node=%u control_rx=%lu control_tx=%lu state=%s imu=%u calibrated=%u cal=%s want=%u arm_pending=%u cal_retries=%u board=%s wake=%s sleeps=%lu short_wakes=%lu last_sleep=%s button=%u vbat=%.2f\n",radioReady,registration.confirmed(),registration.attempts(),registration.node(),(unsigned long)controlRx,(unsigned long)controlTx,bite::stateName(sensor.state()),sensor.healthy(),sensor.calibrated(),calibrationCode(sensor.calibration()),sensor.desiredArmed(),armAssist.pending(),armAssist.retries(),board::name,wakeName,(unsigned long)rtcSleeps,(unsigned long)rtcShortWakes,rtcLastSleep,digitalRead(board::button)==LOW,vbat);
+   else if(!std::strcmp(serialCommand,"log")){
+    Serial.printf("SENSOR log: %u of %lu entries kept, oldest first\n",unsigned(journal.size()),(unsigned long)journal.total());
+    for(size_t i=0;i<journal.size();++i){char line[160];bite::formatLog(journal.at(i),line,sizeof(line));Serial.printf("  %s\n",line);}
+   }
    else if(!std::strcmp(serialCommand,"register")){
     if(sensor.desiredArmed())Serial.println("SENSOR error: disarm before register");
     else if(!radioReady)Serial.println("SENSOR error: radio disabled");
@@ -175,7 +198,7 @@ void serviceSerial(uint32_t now){
    }else if(!std::strcmp(serialCommand,"sleep")){
     if(sensor.desiredArmed())Serial.println("SENSOR error: disarm before sleep");
     else if(!enterSleep("serial",false,now))Serial.printf("SENSOR sleep refused: %s\n",sleepNotice.c_str());
-   }else if(serialLength)Serial.println("SENSOR commands: status, register, sleep, peer AA:BB:CC:DD:EE:FF (disarmed only)");
+   }else if(serialLength)Serial.println("SENSOR commands: status, log, register, sleep, peer AA:BB:CC:DD:EE:FF (disarmed only)");
    // same timestamp as the idle check in loop(): a later millis() would wrap elapsed()
    if(serialLength)disarmedClock.enter(now);
    serialLength=0;serialOverflow=false;
@@ -226,7 +249,7 @@ void build(sets::Builder& b){
             b.Label(ui::radioInfo,"ESP-NOW");
         }
         {Group g(b,tr("Controls","Управление"));
-            if(b.Switch(ui::arm,tr("Armed","Охрана"),&armUi))setArmed(armUi,millis());
+            if(b.Switch(ui::arm,tr("Armed","Охрана"),&armUi))setArmed(armUi,millis(),bite::Source::Web);
             if(b.Button(ui::cal,tr("Calibrate · keep still 2 s","Калибровка · не трогать 2 с")))calRequest=true;
             if(b.Button(ui::test,tr("Test sound / LED","Тест звука / LED")))testRequest=true;
             if(b.Switch(ui::capture,"Serial CSV",&csv)){csvBuffer.clear();if(csv){const char* header="ms,ax_g,ay_g,az_g,dynamic_g,legacy_g,noise_g,threshold_g,state,event,mode\n";csvBuffer.append(header,strlen(header));}}
@@ -241,6 +264,7 @@ void build(sets::Builder& b){
             b.Label(ui::timing,tr("Hz / gaps / I2C errors","Гц / пропуски / ошибки I2C"));
             b.Label(ui::sleep,tr("Sleep","Сон"));b.Label(ui::radioDetails,tr("ESP-NOW counters","ESP-NOW: счётчики"));
             b.Label(ui::message,tr("Last message","Последнее сообщение"));
+            b.Label(ui::events,tr("Recent events (USB: log)","Последние события (USB: log)"));
             b.Paragraph("",tr("Serial CSV: fresh samples, up to 104 Hz. Test sound does not send radio.","Serial CSV: новые выборки, до 104 Гц. Тест звука не отправляет радио."));
         }
     }
@@ -289,6 +313,8 @@ void update(sets::Updater& u){
     u.update(ui::sleep,sleepNotice);
     u.update(ui::radioInfo,!radioEn?tr("Off","Выключен"):radioReady?(registration.confirmed()?tr("Registered at startup","Регистрация при старте подтверждена"):tr("Ready; hub unconfirmed","Готов; хаб не подтверждён")):tr("Error — see details","Ошибка — см. подробности"));
     u.update(ui::radioDetails,radioNotice+" TX="+String(txSuccess.load(std::memory_order_relaxed))+" fail="+String(txFail.load(std::memory_order_relaxed)+sendErrors));u.update(ui::message,notice);
+    String recent;for(size_t i=0;i<journal.size()&&i<3;++i){char line[160];bite::formatLog(journal.newest(i),line,sizeof(line));if(i)recent+=" | ";recent+=line;}
+    u.update(ui::events,recent.length()?recent:String("-"));
 }
 
 bool armWake(){
@@ -315,6 +341,7 @@ bool enterSleep(const char* reason,bool force,uint32_t now){
     if(!board::wakeAllowed()){sleepNotice=tr("Deep sleep blocked: button pin cannot wake this board","Глубокий сон запрещён: вывод кнопки не будит эту плату");return false;}
     if(!button.released()){sleepAttempted=false;sleepNotice=tr("Sleep postponed: button is pressed","Сон отложен: кнопка нажата");return false;}
     if(sensor.desiredArmed()){sensor.setArmed(false,now);armUi=false;db.set(kk::armedSw,false);}
+    armAssist.cancel();
     bool saved=flushSettings();
     if(!saved&&!force){sleepNotice=tr("Sleep postponed: settings save failed","Сон отложен: ошибка записи настроек");return false;}
     if(!armWake()){sleepNotice="Sleep blocked: wake API rejected pin";return false;}
@@ -322,6 +349,7 @@ bool enterSleep(const char* reason,bool force,uint32_t now){
     if(pwmOK){ledcWriteChannel(0,0);ledcWriteChannel(1,0);ledcWriteChannel(2,0);}
     imu.powerDown();
     radioEnd();WiFi.softAPdisconnect(true);WiFi.mode(WIFI_OFF);
+    note(now,bite::Log::Sleep,uint8_t(!std::strcmp(reason,"idle")?bite::SleepReason::Idle:!std::strcmp(reason,"battery")?bite::SleepReason::Battery:!std::strcmp(reason,"serial")?bite::SleepReason::Serial:bite::SleepReason::Button));
     std::strncpy(rtcLastSleep,reason,sizeof(rtcLastSleep)-1);rtcLastSleep[sizeof(rtcLastSleep)-1]=0;++rtcSleeps;
     Serial.printf("SENSOR sleep reason=%s saved=%u; hold the button 1 s to wake\n",reason,saved);Serial.flush();delay(30);
     esp_deep_sleep_start();
@@ -367,6 +395,9 @@ void setup(){
     sett.begin();sett.onBuild(build);sett.onUpdate(update);
     updateBattery();lastBattery=lastRate=now;button.begin(digitalRead(board::button)==LOW,millis());
     if(buttonWake)beep.start(millis(),150);
+    note(millis(),bite::Log::Boot,uint8_t(buttonWake?bite::Wake::Button:cause==ESP_SLEEP_WAKEUP_UNDEFINED?bite::Wake::Reset:bite::Wake::Other));
+    // Before the first IMU frame the core reports FAULT; start the journal from DISARMED.
+    loggedState=bite::State::Disarmed;
     esp_task_wdt_config_t wc={.timeout_ms=30000,.idle_core_mask=0,.trigger_panic=true};
     if(esp_task_wdt_reconfigure(&wc)==ESP_ERR_INVALID_STATE)esp_task_wdt_init(&wc);
     esp_task_wdt_add(nullptr);
@@ -374,12 +405,25 @@ void setup(){
 }
 void loop(){
     esp_task_wdt_reset();sett.tick();uint32_t now=millis();
-    switch(button.update(digitalRead(board::button)==LOW,now)){
+    auto action=button.update(digitalRead(board::button)==LOW,now);
+    if(action!=bite::ButtonAction::None)note(now,bite::Log::Button,uint8_t(action));
+    switch(action){
         case bite::ButtonAction::ArmCue:beep.start(now,60);break;
         case bite::ButtonAction::SleepCue:beep.start(now,400);break;
-        case bite::ButtonAction::ToggleArm:setArmed(!sensor.desiredArmed(),now);break;
+        case bite::ButtonAction::ToggleArm:
+            // A second press while an ARM is pending cancels it, like a DISARM.
+            if(armAssist.pending())setArmed(false,now,bite::Source::Button);
+            // Not calibrated yet: a calibration started now would see the finger. Wait for release + 1 s.
+            else if(!sensor.desiredArmed()&&sensor.healthy()&&!sensor.calibrated()){armAssist.defer(now);note(now,bite::Log::ArmDeferred);}
+            else setArmed(!sensor.desiredArmed(),now,bite::Source::Button);
+            break;
         case bite::ButtonAction::Sleep:enterSleep("button",true,now);break;
         default:break;
+    }
+    if(armAssist.due(now,button.released())){
+        // Restart a calibration that may have begun while the finger was still on the board.
+        if(sensor.state()==bite::State::Calibrating)sensor.beginCalibration(now);
+        setArmed(true,now,bite::Source::Button);
     }
     serviceSerial(now);serviceRegistration(now);
     if(saveConfig){saveConfig=false;persistConfig();}
@@ -392,7 +436,7 @@ void loop(){
     if(rebootAt&&bite::elapsed(now,rebootAt)>=700)ESP.restart();
     if(calRequest){calRequest=false;stopOutputs();if(!sensor.beginCalibration(now))notice="Calibration unavailable: IMU fault";}
     if(testRequest){testRequest=false;if(sensor.state()==bite::State::Disarmed||sensor.state()==bite::State::Armed){alarmPulse.start(now,pulseMs);++pulseCount;}else notice=tr("Test rejected: sensor not ready","Тест отклонён: датчик не готов");}
-    auto oldState=sensor.state();imuSession.supervise(imu,sensor,now);
+    auto oldState=sensor.state();bool wantedBefore=sensor.desiredArmed();imuSession.supervise(imu,sensor,now);
     if(!imuSession.online())stopOutputs();
     if(imuSession.due(now)){
         bite::Vec3 sample;uint8_t event=0;auto result=imuSession.read(imu,sensor,now,sample,event);
@@ -404,6 +448,12 @@ void loop(){
             }
         }else if(result==bite::ReadStatus::TransportError){++readErrors;stopOutputs();}
         else ++noNew;
+    }
+    if(wantedBefore&&!sensor.desiredArmed()&&previousCalibration==bite::Calibration::Running&&sensor.calibration()==bite::Calibration::Moving){
+        // Previously silent: the ARM request was dropped because the calibration saw movement.
+        const auto& t=sensor.telemetry();note(now,bite::Log::ArmCancelled,uint8_t(t.calReject),0,0,t.calRejectValue);
+        stopOutputs();errorCue.start(now,3,80,80);
+        notice=tr("ARM cancelled: the sensor moved during calibration. Keep it still and arm again.","Охрана отменена: датчик двигался во время калибровки. Не трогайте его и включите охрану снова.");
     }
     auto state=sensor.state();if(state!=oldState){
         if(state!=bite::State::Armed)alarmPulse.stop();
@@ -422,11 +472,21 @@ void loop(){
         if(lowBattery.update(startup::batteryKnown(vbat),vbat)){if(sensor.desiredArmed())sendPacket(3);delay(50);enterSleep("battery",true,now);}}
     if(state==bite::State::Fault||state==bite::State::Calibrating||state==bite::State::MotionSuppressed||state==bite::State::Settling)alarmPulse.stop();
     auto calibration=sensor.calibration();
-    if(calibration==bite::Calibration::Success&&previousCalibration!=calibration){
-        db.set("calNoiseG",sensor.telemetry().noiseG);
-        notice=flushSettings()?tr("Noise calibration saved","Калибровка шума сохранена"):tr("Calibration valid in RAM; save failed","Калибровка в RAM; ошибка сохранения");
+    if(calibration!=previousCalibration){
+        const auto& t=sensor.telemetry();
+        if(calibration==bite::Calibration::Success){
+            armAssist.calibrated();note(now,bite::Log::Calibration,uint8_t(calibration),0,0,t.noiseG);
+            db.set("calNoiseG",t.noiseG);
+            notice=flushSettings()?tr("Noise calibration saved","Калибровка шума сохранена"):tr("Calibration valid in RAM; save failed","Калибровка в RAM; ошибка сохранения");
+        }else if(calibration==bite::Calibration::Moving){armAssist.rejected(now);note(now,bite::Log::Calibration,uint8_t(calibration),uint8_t(t.calReject),0,t.calRejectValue);}
+        else if(calibration==bite::Calibration::SensorError)note(now,bite::Log::Calibration,uint8_t(calibration));
     }
     previousCalibration=calibration;
+    // Boot/wake calibration often sees the hand that pressed RESET or the button: retry it
+    // a few times once untouched. This only calibrates; it never arms.
+    bool retryEligible=sensor.state()==bite::State::Disarmed&&!sensor.desiredArmed()&&sensor.healthy()&&!sensor.calibrated()&&calibration==bite::Calibration::Moving&&!armAssist.pending();
+    if(armAssist.retryDue(now,retryEligible,button.released())){sensor.beginCalibration(now);note(now,bite::Log::CalRetry,armAssist.retries(),bite::ArmAssist::maxRetries);}
+    if(sensor.state()!=loggedState){note(now,bite::Log::State,uint8_t(loggedState),uint8_t(sensor.state()));loggedState=sensor.state();}
     if(csv&&csvBuffer.size()){char chunk[128];int available=Serial.availableForWrite();if(available>0){size_t n=csvBuffer.peek(chunk,std::min<size_t>(sizeof(chunk),size_t(available)));csvBuffer.consume(Serial.write(reinterpret_cast<const uint8_t*>(chunk),n));}}
     applyOutputs(now);
 }
