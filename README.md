@@ -1,46 +1,367 @@
-# Fishing Bite Sensor — sensor bench release
+# 🎣 Fishing Bite Sensor
 
-A two-device ESP-NOW rod-motion prototype: an LSM6DS3 sensor and a separate SH1106 receiver hub. The current bench is Seeed XIAO ESP32-C3; the planned rod sensor is Seeed XIAO ESP32-S3. **Field bite-detection accuracy and battery endurance are not measured.**
+[Русская версия](README_RU.md)
 
-[Русская версия](README_RU.md) · [Release scope, validation and local binaries](docs/bench-release.md) · [Detailed bench/flash/CSV instructions](docs/bench-testing.md)
+**A wireless bite alarm for fishing rods.** A small sensor on the rod notices even weak line pulls, signals locally with LEDs and a buzzer, and reports the bite over ESP-NOW radio to a **hub**: a receiver with a screen and a vibration motor that stays next to you. No router, Internet or app is needed; all settings open in your phone's browser.
 
-## Current sensor behavior
+<p align="center">
+  <img src="docs/images/system-overview-en.svg" width="820" alt="System overview: rod sensor, hub and phone">
+</p>
 
-- Checked LSM6DS3 I²C XYZ bursts, Data Ready and fault recovery; accelerometer ±2g/104Hz, unused gyro off.
-- Dynamic XYZ residual versus an explicit Legacy magnitude comparison; threshold and measured noise/effective threshold shown in the web UI.
-- Asynchronous 2-second quiet noise calibration, movement rejection; manual threshold/noise multiplier persist separately from the legacy `deltaG` key.
-- Nonblocking output pulses; passive-buzzer maximum maps to 50% carrier duty, not DC.
-- Temporary movement suppression, then automatic recovery at the stable **new** orientation. Manual disarm and IMU fault never auto-arm.
-- Mobile Web Status / Sensor / Settings with collapsible technical details, English/Russian labels; full-rate bounded Serial CSV and host replay using the firmware core.
-- Original packed 22-byte BitePacket stays compatible with the existing hub; no application-level ACK is added in this release.
+> **Project status.** This is a bench release: the firmware is covered by tests and has run on real XIAO ESP32-C3 boards (sensor + hub), but it **has not been tried on real fishing trips yet**. Bite-detection accuracy, radio range and battery life have not been measured.
 
-There is **no 10+10-second Smart Learn procedure**. Noise calibration measures quiet acceleration noise; it is not training a classifier for fish or rod poses.
+## Contents
 
-## Boards, builds and pins
+- [Features](#features)
+- [What you need](#what-you-need)
+- [Wiring](#wiring)
+- [Installing the firmware](#installing-the-firmware)
+- [Pairing the sensor with the hub](#pairing-the-sensor-with-the-hub)
+- [Web interface](#web-interface)
+- [Using it on the water](#using-it-on-the-water)
+- [Button, sleep and wake](#button-sleep-and-wake)
+- [Signals and states](#signals-and-states)
+- [Hub](#hub)
+- [Tuning sensitivity](#tuning-sensitivity)
+- [Battery](#battery)
+- [Troubleshooting](#troubleshooting)
+- [For developers](#for-developers)
 
-Platform `platformio/espressif32@8.0.0`, Arduino-ESP32 3.3.12 and direct library versions are pinned in `platformio.ini`.
+## Features
 
-```sh
-pio run -e xiao_esp32c3
-pio run -e seeed_xiao_esp32s3
-python3 tools/run_host_tests.py
+**Rod sensor**
+
+- 🎯 **Sensitive detection.** The LSM6DS3 accelerometer is read 104 times per second. The *Dynamic XYZ* algorithm removes gravity and reacts to a jolt in any direction, including across the rod.
+- 🔇 **Noise protection.** At start-up the sensor measures background vibration for 2 seconds and raises its threshold automatically in a noisy setting (wind, rod rest).
+- 🎣 **Pause while handling the rod.** When you pick up or tilt the rod, alarms pause. Once the rod is still again in its **new** position, the sensor re-arms by itself.
+- 🔔 **Local signals.** Green LED means armed; red LED and buzzer mean a bite. Volume and brightness are adjustable.
+- 📡 **ESP-NOW radio to the hub.** Three events: first bite, continuing bite, low battery.
+- 📱 **Phone setup.** The sensor runs its own Wi-Fi access point with a page at `http://192.168.4.1`, in English or Russian.
+- 🔘 **One button** for arming, disarming, deep sleep and wake.
+- 🔋 **Battery saving.** The sensor sleeps on a button hold or by itself after 3 idle minutes. A brush against the button in a bag does not wake it. Below 3.30 V it also goes to sleep to protect the cell.
+- 💾 **Settings are kept** in flash and survive firmware updates.
+
+**Hub (receiver)**
+
+- 🖥️ 128×64 OLED with a Cyrillic font: the name of the rod that has a bite, in large letters.
+- 📳 Vibration motor with different patterns for a bite, a continuing bite and a sensor's low battery.
+- 🎣 Up to 8 sensors per hub, log of the last 12 events.
+- 🌙 The screen turns off after 8 seconds and wakes only for a new alert.
+
+## What you need
+
+| Device | Parts | Notes |
+|---|---|---|
+| **Sensor** | Seeed XIAO ESP32-C3 (bench) or XIAO ESP32-S3 (PCB v4), LSM6DS3 module (I²C), green and red LEDs, passive buzzer (through a transistor), momentary push button, 3.7 V Li-ion cell, 100 kΩ / 100 kΩ battery divider | A KiCad v4.1 board and an 18650 enclosure are in [`kicad/kicad_bite`](kicad/kicad_bite) |
+| **Hub** | XIAO ESP32-C3 or S3, SH1106 128×64 OLED (I²C), vibration motor through a MOSFET, LED, Li-ion cell, 100 kΩ / 100 kΩ divider | Separate firmware in [`ESP_HUB/`](ESP_HUB) |
+| **Phone** | Any smartphone with Wi-Fi and a browser | Only for configuration |
+| **Computer** | [PlatformIO](https://platformio.org/install), USB-C cable | For flashing |
+
+<p align="center">
+  <img src="docs/images/rod-mounted-sensor-concept.png" width="820" alt="Rod-mounted sensor concept">
+  <br><em>Concept: the sensor in a compact case, strapped to the rod with hook-and-loop straps.</em>
+</p>
+
+<p align="center">
+  <img src="kicad/kicad_bite/docs/bite_sensor_3d_iso.png" width="420" alt="PCB v4.1 in 3D">
+  <img src="kicad/kicad_bite/enclosure/img/assembly.png" width="380" alt="18650 enclosure">
+  <br><em>PCB v4.1 and the sealed tube enclosure for an 18650 cell (design files; not yet built or tested).</em>
+</p>
+
+## Wiring
+
+### Sensor — bench (XIAO ESP32-C3 / S3)
+
+| Signal | XIAO pin | Notes |
+|---|---|---|
+| Button | **D1** | To GND; internal pull-up |
+| Battery (100k/100k divider) | D2 | |
+| LSM6DS3 SDA / SCL | D4 / D5 | Module powered from 3.3 V |
+| Green LED | D7 | Through a resistor or driver |
+| Red LED | D8 | Through a resistor or driver |
+| Passive buzzer | D9 | Through a transistor; 3 kHz PWM |
+
+The button must be on **D1**: the board cannot wake from deep sleep on D6. D0 and D6 are unused by the current firmware.
+
+### Sensor — PCB v4 (XIAO ESP32-S3, environment `bite_v4_s3`)
+
+Button D1 (external 10k pull-up), battery D0, red LED D8, green LED D9, buzzer D10, LSM6DS3 on D4/D5.
+
+### Hub
+
+| Signal | XIAO pin |
+|---|---|
+| OLED SDA / SCL | D4 / D5 |
+| LED | D1 |
+| Motor MOSFET | D2 |
+| Battery (100k/100k divider) | A0 |
+
+> ⚠️ Drive the motor and any loud buzzer through a transistor, never straight from a pin. Connect the Li-ion cell to the XIAO **BAT+ / BAT−** pads, not to 3V3. Power details: [docs/power-and-wiring.md](docs/power-and-wiring.md).
+
+## Installing the firmware
+
+1. **Install PlatformIO**, either [PlatformIO IDE for VS Code](https://platformio.org/install/ide?install=vscode) or the [PlatformIO Core CLI](https://docs.platformio.org/en/latest/core/installation/index.html). Make sure `pio --version` works.
+
+2. **Get the project.**
+
+   ```bash
+   git clone https://github.com/igorvin/Fishing-Bite-sensor-ESP.git
+   ```
+
+   ```bash
+   cd Fishing-Bite-sensor-ESP
+   ```
+
+3. **Flash the sensor.** Connect the sensor board over USB and pick the environment for your board. `<PORT>` is the board's port, e.g. `/dev/ttyACM0` or `COM5`.
+
+   | Board | Environment |
+   |---|---|
+   | XIAO ESP32-C3 (bench) | `xiao_esp32c3` |
+   | XIAO ESP32-S3 (bench) | `seeed_xiao_esp32s3` |
+   | PCB v4 (XIAO ESP32-S3) | `bite_v4_s3` |
+
+   ```bash
+   pio run -e xiao_esp32c3 -t upload --upload-port <PORT>
+   ```
+
+4. **Flash the hub.** Connect the **other** board, the hub, and run:
+
+   ```bash
+   pio run -d ESP_HUB -e xiao_esp32c3 -t upload --upload-port <PORT>
+   ```
+
+   For a XIAO ESP32-S3 use `-e seeed_xiao_esp32s3`.
+
+> 💡 Mind the ports: hub firmware on the sensor (or the other way round) will not work. For an ordinary update **do not** run `erase_flash` or `uploadfs`; they wipe the saved settings.
+
+## Pairing the sensor with the hub
+
+The sensor sends events only to the hub whose MAC address you give it.
+
+1. **Find the hub's MAC.** Open the hub's serial monitor and restart the hub (RESET button or reconnect USB). It prints `Hub MAC: AA:BB:CC:DD:EE:FF`.
+
+   ```bash
+   pio device monitor -d ESP_HUB --port <PORT> --baud 115200
+   ```
+
+2. **Give the MAC to the sensor**, in either of two ways:
+   - **From the phone:** on the *Settings* page turn on "ESP-NOW enabled", type the MAC into "Hub unicast MAC" and press **"Save network and restart"**.
+   - **Over USB:** in the sensor's serial monitor type `peer AA:BB:CC:DD:EE:FF` (the sensor must be disarmed).
+
+3. **Check the link.** After the restart the sensor introduces itself to the hub. The sensor's *Status* page shows "Registered at startup" in the ESP-NOW row, and the `status` command in the hub's serial monitor shows `rods=1`. Start-up order does not matter: if you restart the hub, a running sensor registers again.
+
+> ℹ️ Registration is a one-off hello at start-up, not a continuous link check. Individual bites are not acknowledged. Before fishing, check that an alarm reaches the hub: arm the sensor and tap the rod.
+
+## Web interface
+
+1. Power on the sensor (or wake it by holding the button for about 1 s).
+2. On your phone join the Wi-Fi network **`BiteSensor`** (the name on first start; no password).
+3. Open **http://192.168.4.1** in the browser.
+
+The **Page** menu at the top has three sections: *Status*, *Sensor* and *Settings*. Ordinary settings are saved as soon as you change them; a "Saved" message appears.
+
+<table>
+<tr>
+<td align="center" width="33%"><img src="docs/images/web-status-en.png" width="250" alt="Status page"><br><b>Status</b></td>
+<td align="center" width="33%"><img src="docs/images/web-sensor-en.png" width="250" alt="Sensor page"><br><b>Sensor</b></td>
+<td align="center" width="33%"><img src="docs/images/web-settings-en.png" width="250" alt="Settings page"><br><b>Settings</b></td>
+</tr>
+</table>
+
+<sub>Pictures are taken from the firmware's real web front end (Settings library 1.4.3) with example values; your device shows its own numbers.</sub>
+
+### Status
+
+| Item | What it shows or does |
+|---|---|
+| **State** | DISARMED / CALIBRATING / SETTLING / ARMED / SUPPRESSED (rod being moved) / FAULT (accelerometer error) |
+| **Calibration** | Result of the last background measurement: "Success" or "Rejected: movement" |
+| **Battery (approx.)** | Voltage and approximate charge. Without a cell it shows "No valid reading" |
+| **ESP-NOW** | Off / Ready; hub unconfirmed / Registered at startup |
+| **Armed** | Arms or disarms, like the button |
+| **Calibrate · keep still 2 s** | Measures the background again. Keep the sensor still for 2 seconds |
+| **Test sound / LED** | A short buzzer and red-LED signal. Nothing is sent to the hub |
+| **Serial CSV** | Streams every measurement over USB for analysis |
+| **Details** | Shows technical data (below) |
+
+<details>
+<summary><b>Technical details ("Details" switch)</b></summary>
+<p align="center"><img src="docs/images/web-details-en.png" width="300" alt="Technical details"></p>
+
+- **IMU / PWM / storage** — health of the accelerometer, outputs and flash (green means OK).
+- **XYZ, g** — current acceleration on three axes.
+- **Dynamic / legacy, g** — current motion strength for both algorithms.
+- **Noise / threshold, g** — measured background and effective trigger threshold; marked if noise raised the threshold.
+- **Events / pulses / suppressed ms** — bite count, signal count and time spent paused while the rod was moved.
+- **Hz / gaps / I2C errors** — sample rate (about 104 Hz) and communication errors.
+- **Sleep**, **ESP-NOW counters**, **Last message** — service information.
+</details>
+
+### Sensor (detection)
+
+| Setting | Default | Description |
+|---|---|---|
+| **Algorithm** | Dynamic XYZ | *Dynamic XYZ* is recommended: it reacts to motion in any direction. *Legacy magnitude* is the old algorithm, kept for comparison |
+| **Threshold, g** | 0.020 | **Lower means more sensitive.** Range 0.002–0.5 g |
+| **Noise multiplier** | 4 | The effective threshold never drops below background × multiplier. Higher means fewer false alarms |
+| **Legacy threshold** | 0.15 | Only in Legacy mode |
+| **Alarm pulse** | 120 ms | Length of one buzzer and red-LED signal |
+| **Repeat period** | 300 ms | How often the signal repeats during a continuing bite |
+| **Continuous delay** | 250 ms | Continuous motion needed before a bite counts as continuing (event 2) |
+| **Motion suppression** | on | Pause alarms when the rod is picked up or tilted |
+| **Pitch limit** | 25° | Up/down tilt of the rod that starts the pause. 0 disables the check |
+| **Roll limit** | 35° | Rotation around the rod's axis that starts the pause. 0 disables the check |
+| **Motion hold** | 120 ms | How long the tilt must last before the pause starts |
+
+### Settings
+
+| Setting | Description |
+|---|---|
+| **Language / Язык** | English or Русский |
+| **Buzzer volume** | 0–100 % |
+| **Green LED / Red LED** | Brightness 0–100 %. Turn it down at night to save battery |
+| **AP name** | The sensor's Wi-Fi name, also the rod name on the hub screen; the hub shows the first 16 bytes (16 Latin letters). Give each sensor its own name, e.g. "Feeder", "Carp-1" |
+| **AP password** | Empty (open) or 8–63 characters |
+| **ESP-NOW enabled** | Allows sending events to the hub |
+| **Hub unicast MAC** | The hub's MAC as `AA:BB:CC:DD:EE:FF` |
+| **Save network and restart** | Applies the last four fields. They have no effect until you press it |
+
+## Using it on the water
+
+1. **Power on or wake the sensor.** Hold the button for about 1 second until it beeps. The sensor measures the background straight away, so **keep it still for 2 seconds**.
+2. **Mount the sensor on the rod** and put the rod on its rest.
+3. **Arm.** Hold the button for 1–3 seconds: a short beep sounds at 1 second, then release; a confirmation beep follows. The sensor waits 1.5 seconds for the rod to settle (*SETTLING*), then the **green LED** turns on: armed.
+4. **Bite:** red LED and buzzer on the sensor, screen and vibration on the hub. The signal repeats while the line keeps moving.
+5. **Picked up the rod?** No need to disarm: the sensor pauses alarms and re-arms by itself once the rod is still again, in its new position.
+6. **Disarm** with the same 1–3 second hold: the green LED goes out and you hear a short beep.
+7. **Sleep.** Hold the button for more than 3 seconds (long beep) and release. A disarmed sensor with nobody connected also falls asleep after 3 minutes.
+
+> 💡 While armed, the sensor's Wi-Fi stays on for 2 more minutes and then switches off to save power. To open the settings again, disarm with the button; the access point comes back.
+
+## Button, sleep and wake
+
+<p align="center">
+  <img src="docs/images/button-gestures-en.svg" width="820" alt="Button gestures">
+</p>
+
+| Action | Result |
+|---|---|
+| Hold 1–3 s and release | Short beep at 1 s; on release the sensor arms or disarms |
+| Hold ≥ 3 s and release | Long beep at 3 s; on release it disarms, saves settings and sleeps |
+| Touch < 1 s while asleep | Nothing: it goes straight back to sleep (protection against presses in a bag) |
+| Hold ≈ 1 s while asleep | Beep, wake, calibration, DISARMED. The sensor registers with the hub again |
+| 3 min disarmed with no presses or connections | Sleep |
+| Battery < 3.30 V (three readings in a row) | If armed, the hub gets "low battery"; then the sensor sleeps |
+
+## Signals and states
+
+| Situation | Green | Red | Buzzer | Hub |
+|---|---|---|---|---|
+| Disarmed | — | — | short beep when disarming | — |
+| Armed | on | — | beep when arming | — |
+| Bite (event 1) | on | flash | short signal | screen + 300 ms vibration |
+| Continuing bite (event 2) | on | repeated flashes | repeated signals | 800 ms vibration at the start of the episode |
+| Rod being moved (pause) | — | — | silent | — |
+| Battery ≤ 20 % while armed (event 3) | | | | screen + 2 short vibrations |
+| Holding the button | | | beep at 1 s, long beep at 3 s | |
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    state "Calibrating" as Cal
+    state "Disarmed" as Off
+    state "Settling" as Settle
+    state "Armed" as Armed
+    state "Suppressed (moving)" as Pause
+    state "IMU fault" as Fault
+    [*] --> Cal: power on
+    Cal --> Off: 2 s still
+    Off --> Settle: ARM
+    Settle --> Armed: 1.5 s still
+    Armed --> Armed: bite → signal
+    Armed --> Pause: rod tilted
+    Pause --> Settle: still again
+    Armed --> Off: DISARM
+    Pause --> Off: DISARM
+    Armed --> Fault: accelerometer lost
+    Fault --> Cal: accelerometer back
 ```
 
-D-pins remain unchanged: green D7, red D8, buzzer D9, arm D6, power hold D0, power-off input D1, battery ADC D2, SDA D4, SCL D5. Exact C3/S3 GPIO mappings and upload commands are in [bench-testing.md](docs/bench-testing.md).
-
-**D6 is not deep-wake-capable on the declared XIAO boards. Automatic deep sleep is safely blocked with a visible reason until hardware wiring is reviewed.** No replacement pin is silently chosen. Native USB CDC keeps Serial away from the D6/D7 UART/button/LED collision.
-
-## Setup and measurements
-
-Connect to the existing sensor AP (fresh default `BiteSensor`), open `http://192.168.4.1`. Leave the IMU still for calibration; ARM requires a further settling period. Lower threshold means higher sensitivity; noise protection can raise the effective threshold. Network fields are drafts until Validate/Save/Restart. Ordinary firmware update keeps `/config.db`; do not erase flash/upload filesystem just to update firmware.
-
-```sh
-python3 tools/replay_csv.py tests/fixtures/weak_transverse.csv > dynamic.csv
-python3 tools/replay_csv.py tests/fixtures/weak_transverse.csv --mode legacy > legacy.csv
-```
-
-The synthetic comparison shows two transverse impulses detected by Dynamic and missed by Legacy at their default thresholds; it does not establish real bite recall. Mounting, wind, false alarms, low-battery behavior and complete-device current require bench/field tests.
+An accelerometer fault or a manual disarm **never** re-arms the sensor by itself; you arm it again yourself.
 
 ## Hub
 
-The receiver firmware remains in `ESP_HUB/`. This sensor release does not repair the hub's separate dependency, packet queue, display-failure or application-delivery issues identified in the audit. See its project README and the audit plan for that next stage.
+After power-on the hub shows for about 8 seconds how many sensors it has seen and its own battery, then the screen turns off. A new bite or battery warning turns on the screen and the motor.
+
+<table>
+<tr>
+<td align="center"><img src="docs/images/hub-ready.png" width="256" alt="Ready"><br>Ready to receive</td>
+<td align="center"><img src="docs/images/hub-bite.png" width="256" alt="Bite"><br>Bite on rod "ФИДЕР"</td>
+</tr>
+<tr>
+<td align="center"><img src="docs/images/hub-low-battery.png" width="256" alt="Sensor battery"><br>Sensor battery low</td>
+<td align="center"><img src="docs/images/hub-history.png" width="256" alt="Log"><br>Event log (USB command)</td>
+</tr>
+</table>
+
+<sub>Frames are produced by the hub's own drawing code (`ESP_HUB/tools/render_preview.py`) with example names. The hub's interface is in Russian.</sub>
+
+- Rod numbers (01, 02, …) follow the order in which sensors first appear after the hub starts. After a hub restart the list and log start empty.
+- The hub has no buttons. List, log and service screens open with serial commands: `summary`, `list`, `history`, `service`, `status`, `help`.
+- More: [ESP_HUB/README.md](ESP_HUB/README.md), [docs/hub-testing.md](docs/hub-testing.md).
+
+## Tuning sensitivity
+
+1. Start with the defaults: **Dynamic XYZ, threshold 0.020 g, noise multiplier ×4**.
+2. Arm and tap the rod blank lightly or pull the line. If nothing happens, lower the threshold step by step (0.015 → 0.010 …).
+3. Leave the rod on its rest for a few minutes, ideally in the wind. If false alarms appear, raise the threshold or the noise multiplier.
+4. In *Details* look at "Noise / threshold": if it says "noise raised threshold", your threshold is below the background and is not actually in use.
+5. If wind triggers the movement pause, raise the pitch/roll limits or the motion hold time.
+
+## Battery
+
+- Voltage is read every 5 seconds; the percentage is approximate (Li-ion curve).
+- At ≤ 20 % while armed, the hub gets a warning (at most once a minute).
+- Below 3.30 V the sensor goes into deep sleep to protect the cell.
+- The goal is about 48 hours of operation, but current draw and real battery life **have not been measured yet**. How to measure it correctly: [docs/power-and-wiring.md](docs/power-and-wiring.md).
+
+## Troubleshooting
+
+| Problem | What to do |
+|---|---|
+| No `BiteSensor` network | The sensor is asleep: hold the button ~1 s. If it has been armed for over 2 minutes, Wi-Fi is already off: disarm with the button. If you renamed the network, look for the new name |
+| Will not arm | Calibration may have been rejected because of movement. Keep the sensor still, press "Calibrate" and try again. Watch the *State* row |
+| "IMU FAULT" | Check the LSM6DS3 wiring (SDA D4, SCL D5, 3.3 V, GND). After recovery the sensor recalibrates by itself, but you must arm it again |
+| Hub shows no bites | Check the hub MAC and the "ESP-NOW enabled" switch; *Status* should say "Registered at startup". Alarms go to the hub only while armed |
+| Many false alarms | Raise the threshold or noise multiplier; make sure the sensor is mounted firmly |
+| Battery "No valid reading" | Normal when powered from USB without a cell |
+| "FS ERROR" in details | Flash cannot be read; settings work only until the next reboot. Do not format the flash, or old settings will be lost |
+
+**Sensor USB commands** (serial monitor, 115200): `status` — state, `sleep` — go to sleep, `register` — repeat hub registration, `peer AA:BB:CC:DD:EE:FF` — set the hub. `sleep`, `register` and `peer` work only while disarmed.
+
+## For developers
+
+```bash
+python3 tools/run_host_tests.py
+```
+
+```bash
+python3 ESP_HUB/tools/run_host_tests.py
+```
+
+```bash
+pio run -e xiao_esp32c3 -e seeed_xiao_esp32s3 -e bite_v4_s3
+```
+
+```bash
+pio run -d ESP_HUB -e xiao_esp32c3 -e seeed_xiao_esp32s3
+```
+
+- The detector is the portable `include/SensorCore.h`, shared by the firmware, the host tests and recording replay (`tools/replay_csv.py`).
+- Hub packet (22 bytes, packed): `rodName[16]`, `eventType` (1 bite, 2 continuing, 3 battery), `batteryPct`, `deltaG`. Registration protocol: [docs/startup-registration.md](docs/startup-registration.md).
+- Bench procedure, CSV capture, exact GPIOs: [docs/bench-testing.md](docs/bench-testing.md). Release scope: [docs/bench-release.md](docs/bench-release.md).
+- The platform is pinned: `platformio/espressif32@8.0.0` (Arduino-ESP32 3.3.12); library versions are in `platformio.ini`.
+
+### Not verified yet
+
+Real fishing (weak bites, wind, false alarms), radio range, sleep current and battery life, PCB v4 and XIAO S3 hardware, the hub motor's physical vibration. Alarm delivery to the hub is not guaranteed: only the start-up registration is acknowledged. The open access point without a password is fine for the bench but is not secured.
