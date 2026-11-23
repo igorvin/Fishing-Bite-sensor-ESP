@@ -18,6 +18,8 @@ class Features {
     Vec3 gravity_{}; float base_=1; uint32_t last_=0; bool started_=false;
 public:
     void reset(){started_=false;}
+    // Start the gravity estimate from a measured mean instead of one (possibly swaying) sample.
+    void seed(Vec3 g,uint32_t now){gravity_=g;base_=magnitude(g);last_=now;started_=true;}
     Signal update(Vec3 a,uint32_t now,bool freeze=false){
         if(!started_){gravity_=a;base_=magnitude(a);last_=now;started_=true;return {};}
         float dt=std::min<uint32_t>(elapsed(now,last_),100u);last_=now;
@@ -48,15 +50,54 @@ inline const char* stateName(State s){switch(s){case State::Disarmed:return "DIS
 enum class Calibration:uint8_t {None,Running,Success,Moving,SensorError};
 inline const char* calibrationName(Calibration c){switch(c){case Calibration::None:return "not calibrated";case Calibration::Running:return "keep still";case Calibration::Success:return "success";case Calibration::Moving:return "rejected: movement";case Calibration::SensorError:return "rejected: sensor error";}return "error";}
 // Why the last calibration was rejected as movement (diagnostics only; limits unchanged).
-enum class CalReject:uint8_t {None,Magnitude,Deviation,Noise};
-inline const char* calRejectName(CalReject r){switch(r){case CalReject::None:return "none";case CalReject::Magnitude:return "magnitude";case CalReject::Deviation:return "deviation";case CalReject::Noise:return "noise";}return "none";}
+// Why a window was not steady. Calibration, SETTLING and the return from SUPPRESSED share
+// the same rules, so a rod swaying in wind around one position counts as steady.
+enum class Unsteady:uint8_t {None,Magnitude,Range,Drift,Noise};
+// Kept for the existing journal/telemetry names: Deviation = jolt range, plus Drift.
+enum class CalReject:uint8_t {None,Magnitude,Deviation,Noise,Drift};
+inline CalReject calRejectFrom(Unsteady u){switch(u){case Unsteady::Magnitude:return CalReject::Magnitude;case Unsteady::Range:return CalReject::Deviation;case Unsteady::Drift:return CalReject::Drift;case Unsteady::Noise:return CalReject::Noise;default:return CalReject::None;}}
+// Steady = swaying is allowed, being handled or moved is not. Limits (2026-11-23, user: arm in wind):
+//  every |a| within 0.85..1.15 g; peak-to-peak per axis <= 0.20 g (no handling jolts);
+//  mean of the first and second half within 0.035 g (~2 deg, the rod is not being moved);
+//  standard deviation <= 0.05 g (beyond that the threshold would exceed ~0.2 g).
+// The window's standard deviation becomes the noise that raises the effective threshold.
+class SteadyWindow {
+    uint32_t start_=0,n_=0,nA_=0,nB_=0;Vec3 mean_{0,0,0},m2_{0,0,0},sumA_{0,0,0},sumB_{0,0,0},lo_{0,0,0},hi_{0,0,0};
+    static Vec3 scaled(Vec3 v,float k){return {v.x*k,v.y*k,v.z*k};}
+public:
+    static constexpr float rangeMaxG=.20f,driftMaxG=.035f,noiseMaxG=.05f;
+    static float limit(Unsteady u){return u==Unsteady::Range?rangeMaxG:u==Unsteady::Drift?driftMaxG:u==Unsteady::Noise?noiseMaxG:0.f;}
+    void reset(uint32_t now){start_=now;n_=nA_=nB_=0;mean_=m2_=sumA_=sumB_=lo_=hi_=Vec3{0,0,0};}
+    // Immediate failures (magnitude, jolt range); value receives the offending figure.
+    Unsteady add(Vec3 a,uint32_t now,uint32_t windowMs,float& value){
+        float m=magnitude(a);if(m<.85f||m>1.15f){value=m;return Unsteady::Magnitude;}
+        if(!n_){lo_=hi_=a;}else{lo_={std::min(lo_.x,a.x),std::min(lo_.y,a.y),std::min(lo_.z,a.z)};hi_={std::max(hi_.x,a.x),std::max(hi_.y,a.y),std::max(hi_.z,a.z)};}
+        ++n_;Vec3 d=a-mean_;float n=float(n_);mean_.x+=d.x/n;mean_.y+=d.y/n;mean_.z+=d.z/n;
+        m2_.x+=d.x*(a.x-mean_.x);m2_.y+=d.y*(a.y-mean_.y);m2_.z+=d.z*(a.z-mean_.z);
+        if(elapsed(now,start_)<windowMs/2){sumA_.x+=a.x;sumA_.y+=a.y;sumA_.z+=a.z;++nA_;}else{sumB_.x+=a.x;sumB_.y+=a.y;sumB_.z+=a.z;++nB_;}
+        float range=std::max(hi_.x-lo_.x,std::max(hi_.y-lo_.y,hi_.z-lo_.z));
+        if(range>rangeMaxG){value=range;return Unsteady::Range;}
+        return Unsteady::None;
+    }
+    // Enough samples for a verdict: the window has elapsed with at least 50 Hz effective rate.
+    bool full(uint32_t now,uint32_t windowMs)const{return elapsed(now,start_)>=windowMs&&n_>=std::max<uint32_t>(2,windowMs/20)&&nA_&&nB_;}
+    Unsteady verdict(float& value)const{
+        float drift=magnitude(scaled(sumA_,1.f/float(nA_))-scaled(sumB_,1.f/float(nB_)));
+        if(!std::isfinite(drift)||drift>driftMaxG){value=drift;return Unsteady::Drift;}
+        float sd=noise();if(!std::isfinite(sd)||sd>noiseMaxG){value=sd;return Unsteady::Noise;}
+        value=sd;return Unsteady::None;
+    }
+    float noise()const{return n_>1?std::sqrt((m2_.x+m2_.y+m2_.z)/float(n_-1)):0.f;}
+    Vec3 mean()const{return mean_;}
+};
+inline const char* calRejectName(CalReject r){switch(r){case CalReject::None:return "none";case CalReject::Magnitude:return "magnitude";case CalReject::Deviation:return "jolt";case CalReject::Noise:return "sway";case CalReject::Drift:return "drift";}return "none";}
 struct Telemetry {
     Vec3 accel{};Signal signal{};float noiseG=0,effectiveG=.02f;
     uint32_t samples=0,errors=0,gaps=0,events=0,suppressedMs=0,lastSampleMs=0;
     uint8_t event=0,calibrationProgress=0;
     CalReject calReject=CalReject::None;float calRejectValue=0;
-    // SETTLING diagnostics (limits unchanged): how often the 1.5 s stillness timer restarted
-    // since SETTLING began, and the last cause: 1 = sample-to-sample jolt, 2 = |a| outside 0.85..1.15 g.
+    // SETTLING diagnostics: windows that were not steady since SETTLING began and the last
+    // cause (Unsteady) with its value and limit.
     uint32_t settleResets=0;uint8_t settleCause=0;float settleValue=0,settleLimit=0;
 };
 class Pulse {
@@ -78,10 +119,10 @@ class SensorCore {
     bool healthy_=false,wanted_=false,calibrated_=false,started_=false;
     bool attacking_=false,releasing_=false,motion_=false,over_=false,quiet_=false;
     uint32_t stateAt_=0,attackAt_=0,releaseAt_=0,motionAt_=0,lastEventAt_=0,overAt_=0,quietAt_=0;
-    Vec3 previous_{},orientation_{},base_{},calFirst_{},mean_{},m2_{};
-    uint32_t calAt_=0,calCount_=0,lastSuppressionTick_=0;
+    Vec3 orientation_{},base_{};SteadyWindow window_;
+    uint32_t calAt_=0,lastSuppressionTick_=0;
     void clearEvent(){motion_=attacking_=releasing_=false;t_.event=0;}
-    void transition(State s,uint32_t now){state_=s;stateAt_=now;quiet_=over_=false;clearEvent();if(s==State::Settling){t_.settleResets=0;t_.settleCause=0;t_.settleValue=t_.settleLimit=0;}}
+    void transition(State s,uint32_t now){state_=s;stateAt_=now;quiet_=over_=false;clearEvent();window_.reset(now);if(s==State::Settling){t_.settleResets=0;t_.settleCause=0;t_.settleValue=t_.settleLimit=0;}}
     void rejectCalibration(Calibration outcome,uint32_t now){cal_=outcome;wanted_=false;transition(State::Disarmed,now);}
 public:
     const Config& config()const{return cfg_;}
@@ -101,9 +142,12 @@ public:
     }
     bool beginCalibration(uint32_t now){
         if(!healthy_)return false;
-        cal_=Calibration::Running;calAt_=now;calCount_=0;calFirst_=t_.accel;mean_={0,0,0};m2_={0,0,0};
+        cal_=Calibration::Running;calAt_=now;
         t_.calReject=CalReject::None;t_.calRejectValue=0;
-        t_.calibrationProgress=0;transition(State::Calibrating,now);return true;
+        t_.calibrationProgress=0;transition(State::Calibrating,now);
+        // The sample the calibration starts from belongs to its window (as calFirst did before).
+        if(started_){float ignored=0;window_.add(t_.accel,now,2000,ignored);}
+        return true;
     }
     void fault(uint32_t now){
         ++t_.errors;healthy_=false;wanted_=false;calibrated_=false;
@@ -120,45 +164,48 @@ public:
         if(started_&&dt==0)return 0;
         if(started_&&healthy_&&dt>25){++t_.gaps;if(dt>cfg_.maxGapMs)fault(now);}
         bool recovering=!healthy_;healthy_=true;
-        if(recovering){transition(State::Disarmed,now);features_.reset();previous_=orientation_=a;}
+        if(recovering){transition(State::Disarmed,now);features_.reset();orientation_=a;}
         started_=true;t_.lastSampleMs=now;t_.accel=a;++t_.samples;
         t_.signal=features_.update(a,now,state_==State::Armed&&motion_);
-        float okMagnitude=magnitude(a);float step=magnitude(a-previous_);previous_=a;
+        float okMagnitude=magnitude(a);
         float k=std::min<uint32_t>(dt,100u)/(120.f+std::min<uint32_t>(dt,100u));
         orientation_.x+=k*(a.x-orientation_.x);orientation_.y+=k*(a.y-orientation_.y);orientation_.z+=k*(a.z-orientation_.z);
-        bool stable=okMagnitude>.85f&&okMagnitude<1.15f&&step<std::max(.006f,t_.noiseG*3.f);
         t_.effectiveG=cfg_.legacyMode?cfg_.legacyThresholdG:std::max(cfg_.thresholdG,t_.noiseG*cfg_.noiseMultiplier);
         if(state_==State::Calibrating){
-            ++calCount_;
-            Vec3 diff=a-mean_;float n=float(calCount_);
-            mean_.x+=diff.x/n;mean_.y+=diff.y/n;mean_.z+=diff.z/n;
-            m2_.x+=diff.x*(a.x-mean_.x);m2_.y+=diff.y*(a.y-mean_.y);m2_.z+=diff.z*(a.z-mean_.z);
             t_.calibrationProgress=uint8_t(std::min<uint32_t>(100u,elapsed(now,calAt_)*100/2000));
-            float deviation=magnitude(a-calFirst_);
-            if(okMagnitude<.85f||okMagnitude>1.15f){t_.calReject=CalReject::Magnitude;t_.calRejectValue=okMagnitude;rejectCalibration(Calibration::Moving,now);return 0;}
-            if(deviation>.035f){t_.calReject=CalReject::Deviation;t_.calRejectValue=deviation;rejectCalibration(Calibration::Moving,now);return 0;}
-            if(elapsed(now,calAt_)>=2000&&calCount_>=100){
-                float noise=std::sqrt((m2_.x+m2_.y+m2_.z)/float(calCount_-1));
-                if(!std::isfinite(noise)||noise>.015f){t_.calReject=CalReject::Noise;t_.calRejectValue=noise;rejectCalibration(Calibration::Moving,now);return 0;}
-                t_.noiseG=noise;cal_=Calibration::Success;calibrated_=true;t_.calibrationProgress=100;
-                features_.reset();base_=a;transition(wanted_?State::Settling:State::Disarmed,now);
+            float value=0;Unsteady u=window_.add(a,now,2000,value);
+            if(u==Unsteady::None&&window_.full(now,2000)){
+                u=window_.verdict(value);
+                if(u==Unsteady::None){
+                    // Steady sway is accepted; its noise raises the threshold (see SteadyWindow).
+                    t_.noiseG=window_.noise();cal_=Calibration::Success;calibrated_=true;t_.calibrationProgress=100;
+                    features_.reset();base_=window_.mean();transition(wanted_?State::Settling:State::Disarmed,now);return 0;
+                }
             }
+            if(u!=Unsteady::None){t_.calReject=calRejectFrom(u);t_.calRejectValue=value;rejectCalibration(Calibration::Moving,now);}
             return 0;
         }
         if(state_==State::Disarmed||state_==State::Fault)return 0;
         if(state_==State::MotionSuppressed){
             t_.suppressedMs+=elapsed(now,lastSuppressionTick_);lastSuppressionTick_=now;
-            if(stable){if(!quiet_){quiet_=true;quietAt_=now;}if(elapsed(now,quietAt_)>=cfg_.quietMs){features_.reset();transition(State::Settling,now);}}
-            else quiet_=false;
+            float value=0;Unsteady u=window_.add(a,now,cfg_.quietMs,value);
+            if(u==Unsteady::None&&window_.full(now,cfg_.quietMs))u=window_.verdict(value);
+            else if(u==Unsteady::None)return 0;
+            if(u==Unsteady::None){features_.reset();transition(State::Settling,now);}else window_.reset(now);
             return 0;
         }
         if(state_==State::Settling){
-            if(!stable){
-                stateAt_=now;++t_.settleResets;bool magnitudeOk=okMagnitude>.85f&&okMagnitude<1.15f;
-                t_.settleCause=magnitudeOk?1:2;t_.settleValue=magnitudeOk?step:okMagnitude;t_.settleLimit=std::max(.006f,t_.noiseG*3.f);
-                return 0;
+            float value=0;Unsteady u=window_.add(a,now,cfg_.settleMs,value);
+            if(u==Unsteady::None){
+                if(!window_.full(now,cfg_.settleMs))return 0;
+                u=window_.verdict(value);
+                if(u==Unsteady::None){
+                    // Arm at the measured ambient level: in wind the effective threshold rises above the sway.
+                    t_.noiseG=window_.noise();base_=window_.mean();features_.seed(window_.mean(),now);transition(State::Armed,now);return 0;
+                }
             }
-            if(elapsed(now,stateAt_)>=cfg_.settleMs){base_=orientation_;features_.reset();features_.update(a,now);transition(State::Armed,now);}
+            ++t_.settleResets;t_.settleCause=uint8_t(u);t_.settleValue=value;t_.settleLimit=SteadyWindow::limit(u);
+            stateAt_=now;window_.reset(now);
             return 0;
         }
         if(cfg_.suppression){

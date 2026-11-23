@@ -73,9 +73,9 @@ RTC_DATA_ATTR uint32_t rtcSleeps=0,rtcShortWakes=0;RTC_DATA_ATTR char rtcLastSle
 const char* wakeName="reset";
 const char* tr(const char* en,const char* ru){return language?ru:en;}
 // Journal entries are printed live on USB, except during CSV capture (they would corrupt the stream).
-void note(uint32_t now,bite::Log type,uint8_t a=0,uint8_t b=0,uint8_t c=0,float v=0){
-    const auto& e=journal.add(now,type,a,b,c,v);
-    if(csv)return;char line[160];bite::formatLog(e,line,sizeof(line));Serial.printf("SENSOR log %s\n",line);
+void note(uint32_t now,bite::Log type,uint8_t a=0,uint8_t b=0,uint8_t c=0,float v=0,float w=0){
+    const auto& e=journal.add(now,type,a,b,c,v,w);
+    if(csv)return;char line[200];bite::formatLog(e,line,sizeof(line));Serial.printf("SENSOR log %s\n",line);
 }
 
 namespace ui {
@@ -188,7 +188,7 @@ void serviceSerial(uint32_t now){
    else if(!std::strcmp(serialCommand,"status"))Serial.printf("SENSOR status radio=%u registered=%u attempts=%u node=%u control_rx=%lu control_tx=%lu state=%s imu=%u calibrated=%u cal=%s want=%u arm_pending=%u cal_retries=%u board=%s wake=%s sleeps=%lu short_wakes=%lu last_sleep=%s button=%u vbat=%.2f\n",radioReady,registration.confirmed(),registration.attempts(),registration.node(),(unsigned long)controlRx,(unsigned long)controlTx,bite::stateName(sensor.state()),sensor.healthy(),sensor.calibrated(),calibrationCode(sensor.calibration()),sensor.desiredArmed(),armAssist.pending(),armAssist.retries(),board::name,wakeName,(unsigned long)rtcSleeps,(unsigned long)rtcShortWakes,rtcLastSleep,digitalRead(board::button)==LOW,vbat);
    else if(!std::strcmp(serialCommand,"log")){
     Serial.printf("SENSOR log: %u of %lu entries kept, oldest first\n",unsigned(journal.size()),(unsigned long)journal.total());
-    for(size_t i=0;i<journal.size();++i){char line[160];bite::formatLog(journal.at(i),line,sizeof(line));Serial.printf("  %s\n",line);}
+    for(size_t i=0;i<journal.size();++i){char line[200];bite::formatLog(journal.at(i),line,sizeof(line));Serial.printf("  %s\n",line);}
    }
    else if(!std::strcmp(serialCommand,"register")){
     if(sensor.desiredArmed())Serial.println("SENSOR error: disarm before register");
@@ -312,8 +312,8 @@ void update(sets::Updater& u){
     u.updateColor(ui::health,sensor.healthy()&&pwmOK?sets::Colors::Green:sets::Colors::Red);
     u.update(ui::xyz,String(t.accel.x,4)+", "+String(t.accel.y,4)+", "+String(t.accel.z,4));
     u.update(ui::signals,String(t.signal.dynamic,4)+" / "+String(t.signal.legacy,4));
-    u.update(ui::noiseInfo,String(t.noiseG,4)+" / "+String(t.effectiveG,4)+(t.effectiveG>sensor.config().thresholdG&&!mode?tr(" (noise raised threshold)"," (порог повышен шумом)"):""));
-    u.update(ui::calInfo,benchCalibrationText(sensor.calibration(),t.calibrationProgress,language));
+    u.update(ui::noiseInfo,String(t.noiseG,4)+" / "+String(t.effectiveG,4)+(t.effectiveG>sensor.config().thresholdG&&!mode?tr(" (raised by noise/sway)"," (порог поднят: шум/качание)"):""));
+    u.update(ui::calInfo,benchCalibrationText(sensor.calibration(),t.calibrationProgress,language)+(sensor.calibration()==bite::Calibration::Success&&t.noiseG>.015f?tr(" (sway)"," (с качанием)"):""));
     u.update(ui::battery,vbat>=2.5f&&vbat<=4.5f?String(vbat,2)+" V / ≈"+String(batteryPct)+"%":String(tr("No valid reading","Нет достоверного замера")));
     u.update(ui::batteryRaw,String(vbat,2)+" V / ≈"+String(batteryPct)+"%");
     u.update(ui::stats,String(t.events)+" / "+String(pulseCount)+" / "+String(t.suppressedMs));
@@ -321,7 +321,7 @@ void update(sets::Updater& u){
     u.update(ui::sleep,sleepNotice);
     u.update(ui::radioInfo,!radioEn?tr("Off","Выключен"):radioReady?(registration.confirmed()?tr("Registered at startup","Регистрация при старте подтверждена"):tr("Ready; hub unconfirmed","Готов; хаб не подтверждён")):tr("Error — see details","Ошибка — см. подробности"));
     u.update(ui::radioDetails,radioNotice+" TX="+String(txSuccess.load(std::memory_order_relaxed))+" fail="+String(txFail.load(std::memory_order_relaxed)+sendErrors));u.update(ui::message,notice);
-    String recent;for(size_t i=0;i<journal.size()&&i<3;++i){char line[160];bite::formatLog(journal.newest(i),line,sizeof(line));if(i)recent+=" | ";recent+=line;}
+    String recent;for(size_t i=0;i<journal.size()&&i<3;++i){char line[200];bite::formatLog(journal.newest(i),line,sizeof(line));if(i)recent+=" | ";recent+=line;}
     u.update(ui::events,recent.length()?recent:String("-"));
 }
 
@@ -503,7 +503,15 @@ void loop(){
         else if(bite::elapsed(now,settleLogAt)>=3000){const auto& t=sensor.telemetry();settleLogAt=now;
             if(t.settleResets)note(now,bite::Log::Settling,uint8_t(std::min<uint32_t>(t.settleResets,255)),t.settleCause,uint8_t(std::min(255.f,t.settleLimit*1000.f+.5f)),t.settleValue);}
     }
-    if(sensor.state()!=loggedState){note(now,bite::Log::State,uint8_t(loggedState),uint8_t(sensor.state()));loggedState=sensor.state();}
+    if(sensor.state()!=loggedState){
+        note(now,bite::Log::State,uint8_t(loggedState),uint8_t(sensor.state()));
+        if(sensor.state()==bite::State::Armed){
+            // Ambient measured while settling and the threshold it implies (raised above wind sway).
+            const auto& c=sensor.config();float noise=sensor.telemetry().noiseG;
+            note(now,bite::Log::Armed,0,0,0,noise,c.legacyMode?c.legacyThresholdG:std::max(c.thresholdG,noise*c.noiseMultiplier));
+        }
+        loggedState=sensor.state();
+    }
     if(csv&&csvBuffer.size()){char chunk[128];int available=Serial.availableForWrite();if(available>0){size_t n=csvBuffer.peek(chunk,std::min<size_t>(sizeof(chunk),size_t(available)));csvBuffer.consume(Serial.write(reinterpret_cast<const uint8_t*>(chunk),n));}}
     applyOutputs(now);
 }

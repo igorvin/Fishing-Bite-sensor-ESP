@@ -237,7 +237,7 @@ The **Page** menu at the top has three sections: *Status*, *Sensor* and *Setting
 
 1. **Power on or wake the sensor.** Hold the button for about 1 second until it beeps. The sensor measures the background straight away, so **keep it still for 2 seconds**.
 2. **Mount the sensor on the rod** and put the rod on its rest.
-3. **Arm.** Hold the button for 1–3 seconds: a short beep sounds at 1 second, then release. The **green LED blinks** while the sensor waits for 1.5 seconds of complete stillness (*SETTLING*); any touch restarts that wait. When the green LED stays on and a **long beep** sounds, it is armed. Do not press again while green is blinking: a second press disarms. If the sensor has not been calibrated yet, it starts calibrating 1 second after you release the button (do not touch it for 2 seconds).
+3. **Arm.** Hold the button for 1–3 seconds: a short beep sounds at 1 second, then release. The **green LED blinks** while the sensor checks for 1.5 seconds that it is *steady* (*SETTLING*): swaying in wind is fine, being handled or moved is not and restarts the check. When the green LED stays on and a **long beep** sounds, it is armed. Do not press again while green is blinking: a second press disarms. If the sensor has not been calibrated yet, it starts calibrating 1 second after you release the button (do not touch it for 2 seconds).
 4. **Bite:** red LED and buzzer on the sensor, screen and vibration on the hub. The signal repeats while the line keeps moving.
 5. **Picked up the rod?** No need to disarm: the sensor pauses alarms and re-arms by itself once the rod is still again, in its new position.
 6. **Disarm** with the same 1–3 second hold: the green LED goes out and you hear a short beep.
@@ -331,6 +331,20 @@ After power-on the hub shows for about 20 seconds how many sensors it has seen, 
 3. Leave the rod on its rest for a few minutes, ideally in the wind. If false alarms appear, raise the threshold or the noise multiplier.
 4. In *Details* look at "Noise / threshold": if it says "noise raised threshold", your threshold is below the background and is not actually in use.
 5. If wind triggers the movement pause, raise the pitch/roll limits or the motion hold time.
+
+### Wind and a swaying rod
+
+The sensor does not need the rod to be perfectly still. During calibration and arming it checks a 1.5 s window for **steadiness**:
+
+| Check | Limit | Means |
+|---|---|---|
+| Position drift (first vs second half of the window) | 0.035 g (≈2°) | the rod is being moved to a new place |
+| Peak-to-peak jolt on any axis | 0.20 g | the sensor is being handled |
+| Sway (standard deviation) | 0.05 g | wind too strong to guard reliably |
+
+If the window is steady, the sensor arms and **raises the threshold above the measured sway**: threshold = max(your threshold, sway × noise multiplier). The journal shows it, e.g. `ARMED: ambient 0.0120 g -> threshold 0.048 g (raised for sway)`, and *Details* marks the threshold "raised by noise/sway". The sway is re-measured at every arming, so a calm moment gives back full sensitivity.
+
+The trade-off is physical: in wind a bite must be stronger than the sway to be noticed. If the wind still causes false alarms, raise the noise multiplier (×5–6); if bites are missed, lower it (×3). When it will not arm, `still SETTLING ...` lines in the journal name the reason.
 
 ## Battery
 

@@ -41,8 +41,10 @@ std::vector<std::pair<const char*,std::function<void()>>> tests={
 {"first-armed-impulse",[]{SensorCore c;uint32_t t=arm(c);uint8_t event=0;for(int i=0;i<5;++i){t+=10;event|=c.update({.1f,0,1},t);}require(event==1,"first impulse after settle must not become gravity baseline");}},
 {"dynamic-versus-legacy",[]{SensorCore d,l;auto t=arm(d);arm(l);Config cfg=l.config();cfg.legacyMode=true;l.configure(cfg);int de=0,le=0;for(int i=0;i<10;++i){t+=10;de+=d.update({.1f,0,1},t)==1;le+=l.update({.1f,0,1},t)==1;}require(de==1&&le==0,"same transverse input dynamic triggers once, legacy misses");}},
 {"stationary-calibration",[]{SensorCore c;calibrate(c);require(c.calibration()==Calibration::Success&&c.telemetry().noiseG<.0001f,"quiet outcome and noise");}},
-{"moving-calibration",[]{SensorCore c;c.update({0,0,1},100);c.beginCalibration(100);c.update({.08f,0,1},110);require(c.calibration()==Calibration::Moving&&!c.calibrated()&&c.state()==State::Disarmed,"movement rejects calibration");}},
-{"noisy-calibration",[]{SensorCore c;uint32_t t=calibrate(c);c.beginCalibration(t);for(int i=0;i<205;++i){t+=10;c.update({i%2?.01f:-.01f,0,1},t);}require(c.telemetry().noiseG>.009f,"noise measured");c.setArmed(true,t);for(int i=0;i<160;++i){t+=10;c.update({0,0,1},t);}require(c.telemetry().effectiveG>.035f,"noise raises effective threshold");}},
+{"moving-calibration",[]{SensorCore c;c.update({0,0,1},100);c.beginCalibration(100);c.update({.08f,0,1},110);require(c.state()==State::Calibrating,"a small sway sample is not handling");c.update({.3f,0,1},120);require(c.calibration()==Calibration::Moving&&!c.calibrated()&&c.state()==State::Disarmed&&c.telemetry().calReject==CalReject::Deviation,"a handling jolt rejects calibration");}},
+{"noisy-calibration",[]{SensorCore c;uint32_t t=calibrate(c);c.beginCalibration(t);for(int i=0;i<205;++i){t+=10;c.update({i%2?.01f:-.01f,0,1},t);}require(c.calibrated()&&c.telemetry().noiseG>.009f,"steady vibration is accepted and measured");
+  c.setArmed(true,t);for(int i=0;i<160;++i){t+=10;c.update({i%2?.01f:-.01f,0,1},t);}require(c.state()==State::Armed&&c.telemetry().effectiveG>.035f,"arming in the same vibration raises the threshold");
+  c.setArmed(false,t);c.setArmed(true,t);for(int i=0;i<160;++i){t+=10;c.update({0,0,1},t);}require(c.state()==State::Armed&&c.telemetry().effectiveG<.021f,"arming when still uses the configured threshold again");}},
 {"manual-disarm",[]{SensorCore c;auto t=arm(c);c.setArmed(false,t);for(int i=0;i<1000;++i){t+=10;c.update({0,.5f,.866f},t);}require(c.state()==State::Disarmed&&!c.desiredArmed(),"manual disarm cannot auto resume");}},
 {"suppression-new-position",[]{SensorCore c;auto t=arm(c);for(int i=0;i<100;++i){t+=10;c.update({0,.8660254f,.5f},t);}require(c.state()==State::MotionSuppressed,"rod movement suppresses");for(int i=0;i<400;++i){t+=10;auto e=c.update({0,.8660254f,.5f},t);require(e==0,"no alarm while resuming at stable new position");}require(c.state()==State::Armed&&c.desiredArmed(),"resume without returning to old angle");}},
 {"fault-cannot-arm",[]{SensorCore c;require(!c.setArmed(true,10),"no IMU cannot arm");auto t=arm(c);c.fault(t);require(c.state()==State::Fault&&!c.desiredArmed(),"fault clears desired arm");c.update({0,0,1},t+10);require(c.state()==State::Disarmed&&!c.desiredArmed(),"recovery never silently arms");}},
@@ -93,19 +95,21 @@ std::vector<std::pair<const char*,std::function<void()>>> tests={
 {"csv-buffer-backpressure",[]{CsvBuffer<16> q;require(q.append("first\n",6),"enqueue full record");require(!q.append("too-long-record\n",16)&&q.size()==6,"overflow drops whole record");char out[16];require(q.peek(out,3)==3&&out[0]=='f',"partial drain");q.consume(3);require(q.append("second\n",7),"wrap-around enqueue");auto n=q.peek(out,16);require(std::string(out,n)=="st\nsecond\n","record order after wrap");}},
 {"persisted-noise-validation",[]{SensorCore c;require(c.restoreNoise(.01f)&&c.telemetry().noiseG==.01f,"restore noise result");require(!c.restoreNoise(.2f)&&c.telemetry().noiseG==.01f,"reject invalid noise without replacing");require(!c.calibrated()&&!c.setArmed(true,0),"stored noise alone never proves current IMU ready");}},
 {"calibration-reject-reason",[]{
-  SensorCore c;uint32_t t=1000;c.update({0,0,1},t);c.beginCalibration(t);t+=10;c.update({.05f,0,1},t);
-  require(c.calibration()==Calibration::Moving&&c.telemetry().calReject==CalReject::Deviation&&c.telemetry().calRejectValue>.049f&&c.telemetry().calRejectValue<.051f,"deviation from first sample is recorded with its size");
+  SensorCore c;uint32_t t=1000;c.update({0,0,1},t);c.beginCalibration(t);t+=10;c.update({.25f,0,1},t);
+  require(c.calibration()==Calibration::Moving&&c.telemetry().calReject==CalReject::Deviation&&c.telemetry().calRejectValue>.249f&&c.telemetry().calRejectValue<.251f,"handling jolt is recorded with its peak-to-peak size");
   c.beginCalibration(t);require(c.telemetry().calReject==CalReject::None,"a new calibration clears the old reason");t+=10;c.update({0,0,.7f},t);
   require(c.telemetry().calReject==CalReject::Magnitude,"out-of-range magnitude is recorded");
-  SensorCore n;t=1000;n.update({0,0,1},t);n.beginCalibration(t);for(int i=0;i<201;++i){t+=10;n.update({(i%2)?.03f:-.03f,0,1},t);}
-  require(n.calibration()==Calibration::Moving&&n.telemetry().calReject==CalReject::Noise&&n.telemetry().calRejectValue>.015f,"steady vibration is a noise rejection");}},
+  SensorCore d;t=1000;d.update({0,0,1},t);d.beginCalibration(t);for(int i=0;i<201;++i){t+=10;d.update({i<100?0.f:.06f,0,1},t);}
+  require(d.calibration()==Calibration::Moving&&d.telemetry().calReject==CalReject::Drift&&d.telemetry().calRejectValue>.035f,"a position change between the halves is drift");
+  SensorCore n;t=1000;n.update({0,0,1},t);n.beginCalibration(t);for(int i=0;i<201;++i){t+=10;n.update({(i%2)?.06f:-.06f,(i%2)?-.06f:.06f,1},t);}
+  require(n.calibration()==Calibration::Moving&&n.telemetry().calReject==CalReject::Noise&&n.telemetry().calRejectValue>.05f,"sway beyond 0.05 g SD is too strong");}},
 {"button-arm-uncalibrated-reproduction",[]{
   // Field report: after RESET the button would not arm, web ARM worked, then the button worked.
   SensorCore c;Config cfg;c.configure(cfg);uint32_t t=1000;c.update({0,0,1},t);c.beginCalibration(t);
-  for(int i=0;i<20;++i){t+=10;c.update({.04f*(i%2),0,1},t);}
-  require(!c.calibrated()&&c.calibration()==Calibration::Moving,"touch during boot calibration rejects it");
+  for(int i=0;i<20;++i){t+=10;c.update({(i%2)?.15f:-.15f,0,1},t);}
+  require(!c.calibrated()&&c.calibration()==Calibration::Moving,"a finger jolting the board during boot calibration rejects it");
   require(c.setArmed(true,t)&&c.state()==State::Calibrating,"button ARM then needs a calibration");
-  for(int i=0;i<10;++i){t+=10;c.update({(i%2)?.05f:-.05f,0,1},t);}
+  for(int i=0;i<10;++i){t+=10;c.update({(i%2)?.15f:-.15f,0,1},t);}
   require(!c.desiredArmed()&&c.state()==State::Disarmed,"release jiggle silently cancels that ARM (core behaviour kept)");
   // ArmAssist: same button ARM, calibration starts only 1 s after release.
   ArmAssist assist;assist.defer(t);require(!assist.due(t+500,true),"not before the settle delay");
@@ -134,26 +138,33 @@ std::vector<std::pair<const char*,std::function<void()>>> tests={
 {"event-log-ring-and-text",[]{
   EventLog<4> log;for(uint8_t i=0;i<6;++i)log.add(i*10,Log::CalRetry,i,3);
   require(log.size()==4&&log.total()==6&&log.at(0).a==2&&log.newest().a==5&&log.newest(3).a==2,"keeps the newest entries in order");
-  char line[160];LogEntry e{12345,Log::ArmCancelled,uint8_t(CalReject::Deviation),0,0,.05f};formatLog(e,line,sizeof(line));
-  require(std::strstr(line,"12.345s")&&std::strstr(line,"ARM cancelled")&&std::strstr(line,"moved 0.050 g")&&std::strstr(line,"limit 0.035"),"cancel explains the reason");
+  char line[160];LogEntry e{12345,Log::ArmCancelled,uint8_t(CalReject::Deviation),0,0,.25f};formatLog(e,line,sizeof(line));
+  require(std::strstr(line,"12.345s")&&std::strstr(line,"ARM cancelled")&&std::strstr(line,"jolt 0.250 g peak-to-peak")&&std::strstr(line,"limit 0.20"),"cancel explains the reason");
   e=LogEntry{0,Log::Arm,uint8_t(Source::Web),1,uint8_t(State::Calibrating),0};formatLog(e,line,sizeof(line));
   require(std::strstr(line,"ARM from web -> CALIBRATING"),"arm request shows source and result");
   e=LogEntry{0,Log::Arm,uint8_t(Source::Button),1,Refused,0};formatLog(e,line,sizeof(line));require(std::strstr(line,"refused: IMU fault"),"refusal");
   e=LogEntry{0,Log::Button,uint8_t(ButtonAction::ToggleArm),0,0,0};formatLog(e,line,sizeof(line));require(std::strstr(line,"toggle ARM"),"button action");
   char tiny[8];int n=formatLog(e,tiny,sizeof(tiny));require(n>0&&std::strlen(tiny)==7,"truncates safely");}},
-{"settling-restarts-are-explained",[]{
-  // Field log 2026-11-23: ARM -> SETTLING, but a hand on the sensor kept restarting the 1.5 s stillness timer.
+{"arm-in-wind-sway",[]{
+  // Field log 2026-11-23: wind-like sway (jolts 0.008..0.012 g at 104 Hz) kept SETTLING forever.
+  auto sway=[](uint32_t t,float amp){float ph=float(t%667)/667.f*6.2831853f;return Vec3{amp*std::sin(ph),.5f*amp*std::cos(ph),1};};
   SensorCore c;Config cfg;c.configure(cfg);uint32_t t=calibrate(c);require(c.setArmed(true,t)&&c.state()==State::Settling,"armed request settles first");
-  require(c.telemetry().settleResets==0,"fresh SETTLING has no restarts");
-  for(int i=0;i<300;++i){t+=10;c.update({(i%20==0)?.02f:0.f,0,1},t);}
-  require(c.state()==State::Settling,"a jolt every 200 ms never lets it arm");
-  require(c.telemetry().settleResets>=20&&c.telemetry().settleCause==1&&c.telemetry().settleValue>.019f&&c.telemetry().settleLimit>.0059f&&c.telemetry().settleLimit<.0061f,"restarts, cause and jolt size recorded");
-  for(int i=0;i<160;++i){t+=10;c.update({0,0,1},t);}
-  require(c.state()==State::Armed,"1.5 s of stillness then arms");
-  c.setArmed(false,t);c.setArmed(true,t);require(c.telemetry().settleResets==0,"counters restart with each SETTLING");
-  char line[200];LogEntry e{1000,Log::Settling,25,1,6,.012f};formatLog(e,line,sizeof(line));
-  require(std::strstr(line,"still SETTLING")&&std::strstr(line,"restarted 25 times")&&std::strstr(line,"jolt 0.0120 g (limit 0.006)"),"journal text for jolts");
-  e=LogEntry{1000,Log::Settling,255,2,6,1.2f};formatLog(e,line,sizeof(line));require(std::strstr(line,"255+ times")&&std::strstr(line,"|a| 1.200 g"),"journal text for magnitude");}},
+  uint32_t armedAt=0;for(int i=0;i<400&&!armedAt;++i){t+=10;c.update(sway(t,.03f),t);if(c.state()==State::Armed)armedAt=t;}
+  require(armedAt&&c.telemetry().settleResets==0,"steady 1.5 Hz sway arms after one 1.5 s window");
+  float noise=c.telemetry().noiseG;require(noise>.015f&&noise<.03f,"window SD measures the sway");
+  uint8_t ev=0;for(int i=0;i<1000;++i){t+=10;ev|=c.update(sway(t,.03f),t);}require(ev==0&&c.telemetry().effectiveG>.06f,"10 s of the same sway: no alarm, threshold raised above it");
+  for(int i=0;i<8;++i){t+=10;Vec3 a=sway(t,.03f);a.y+=.25f;ev|=c.update(a,t);}require(ev==1,"a bite stronger than the sway still alarms");
+  // Being handled, being moved, or sway too strong: not steady, cause recorded, no arming.
+  SensorCore h;h.configure(cfg);t=calibrate(h);h.setArmed(true,t);for(int i=0;i<400;++i){t+=10;h.update({(i%30==0)?.3f:0.f,0,1},t);}
+  require(h.state()==State::Settling&&h.telemetry().settleResets>0&&h.telemetry().settleCause==uint8_t(Unsteady::Range),"handling jolts");
+  SensorCore m;m.configure(cfg);t=calibrate(m);m.setArmed(true,t);for(int i=0;i<400;++i){t+=10;m.update({.0008f*float(i),0,1},t);}
+  require(m.state()==State::Settling&&m.telemetry().settleCause==uint8_t(Unsteady::Drift),"slowly moving to a new position");
+  SensorCore w;w.configure(cfg);t=calibrate(w);w.setArmed(true,t);for(int i=0;i<400;++i){t+=10;w.update(sway(t,.09f),t);}
+  require(w.state()==State::Settling&&w.telemetry().settleCause==uint8_t(Unsteady::Noise)&&w.telemetry().settleLimit==.05f,"sway too strong to guard");
+  for(int i=0;i<320;++i){t+=10;w.update({0,0,1},t);}require(w.state()==State::Armed&&w.telemetry().effectiveG<.021f,"wind drops: arms at the configured threshold");
+  char line[200];LogEntry e{1000,Log::Settling,7,uint8_t(Unsteady::Drift),0,.05f};formatLog(e,line,sizeof(line));
+  require(std::strstr(line,"still SETTLING")&&std::strstr(line,"7 windows")&&std::strstr(line,"drifted 0.050 g"),"journal text for settling");
+  e=LogEntry{1000,Log::Armed,0,0,0,.02f,.08f};formatLog(e,line,sizeof(line));require(std::strstr(line,"threshold 0.080 g (raised for sway)"),"journal text for armed in sway");}},
 {"timestamp-rollover",[]{SensorCore c;uint32_t t=UINT32_MAX-1000;c.update({0,0,1},t);c.beginCalibration(t);for(int i=0;i<201;++i){t+=10;c.update({0,0,1},t);}require(c.calibrated(),"calibration spans rollover");}}
 };
 int failures=0;for(auto& test:tests){try{test.second();std::printf("PASS: %s\n",test.first);}catch(const std::exception& e){++failures;std::fprintf(stderr,"FAIL: %s: %s\n",test.first,e.what());}}
