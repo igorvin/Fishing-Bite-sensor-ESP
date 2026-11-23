@@ -8,7 +8,7 @@
 namespace bite {
 // Bounded RAM journal of what the sensor decided and why. Printed live on USB and
 // dumped by the "log" command, so a failed ARM can be explained after the fact.
-enum class Log:uint8_t {Boot,Button,Arm,ArmDeferred,ArmCancelled,State,Calibration,CalRetry,Sleep};
+enum class Log:uint8_t {Boot,Button,Arm,ArmDeferred,ArmCancelled,State,Calibration,CalRetry,Sleep,Settling};
 enum class Source:uint8_t {Button,Web,Serial};
 enum class Wake:uint8_t {Reset,Button,Other};
 enum class SleepReason:uint8_t {Button,Idle,Battery,Serial};
@@ -52,6 +52,11 @@ inline int formatLog(const LogEntry& e,char* out,size_t n){
         break;
     case Log::CalRetry:body=std::snprintf(out,n,"calibration retry %u/%u (was rejected, not armed)",unsigned(e.a),unsigned(e.b));break;
     case Log::Sleep:body=std::snprintf(out,n,"sleep reason=%s",sleepLogName(e.a));break;
+    // a = restarts (capped 255), b = cause, c = jolt limit in mg, v = last value
+    case Log::Settling:
+        if(e.b==2)body=std::snprintf(out,n,"still SETTLING: 1.5 s stillness restarted %u%s times, last |a| %.3f g (allowed 0.85..1.15)",unsigned(e.a),e.a==255?"+":"",double(e.v));
+        else body=std::snprintf(out,n,"still SETTLING: 1.5 s stillness restarted %u%s times, last jolt %.4f g (limit %.3f)",unsigned(e.a),e.a==255?"+":"",double(e.v),double(e.c)/1000.0);
+        break;
     }
     return body<0?body:head+body;
 }

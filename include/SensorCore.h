@@ -55,6 +55,9 @@ struct Telemetry {
     uint32_t samples=0,errors=0,gaps=0,events=0,suppressedMs=0,lastSampleMs=0;
     uint8_t event=0,calibrationProgress=0;
     CalReject calReject=CalReject::None;float calRejectValue=0;
+    // SETTLING diagnostics (limits unchanged): how often the 1.5 s stillness timer restarted
+    // since SETTLING began, and the last cause: 1 = sample-to-sample jolt, 2 = |a| outside 0.85..1.15 g.
+    uint32_t settleResets=0;uint8_t settleCause=0;float settleValue=0,settleLimit=0;
 };
 class Pulse {
     bool on_=false;uint32_t start_=0,duration_=0;
@@ -78,7 +81,7 @@ class SensorCore {
     Vec3 previous_{},orientation_{},base_{},calFirst_{},mean_{},m2_{};
     uint32_t calAt_=0,calCount_=0,lastSuppressionTick_=0;
     void clearEvent(){motion_=attacking_=releasing_=false;t_.event=0;}
-    void transition(State s,uint32_t now){state_=s;stateAt_=now;quiet_=over_=false;clearEvent();}
+    void transition(State s,uint32_t now){state_=s;stateAt_=now;quiet_=over_=false;clearEvent();if(s==State::Settling){t_.settleResets=0;t_.settleCause=0;t_.settleValue=t_.settleLimit=0;}}
     void rejectCalibration(Calibration outcome,uint32_t now){cal_=outcome;wanted_=false;transition(State::Disarmed,now);}
 public:
     const Config& config()const{return cfg_;}
@@ -150,7 +153,11 @@ public:
             return 0;
         }
         if(state_==State::Settling){
-            if(!stable){stateAt_=now;return 0;}
+            if(!stable){
+                stateAt_=now;++t_.settleResets;bool magnitudeOk=okMagnitude>.85f&&okMagnitude<1.15f;
+                t_.settleCause=magnitudeOk?1:2;t_.settleValue=magnitudeOk?step:okMagnitude;t_.settleLimit=std::max(.006f,t_.noiseG*3.f);
+                return 0;
+            }
             if(elapsed(now,stateAt_)>=cfg_.settleMs){base_=orientation_;features_.reset();features_.update(a,now);transition(State::Armed,now);}
             return 0;
         }

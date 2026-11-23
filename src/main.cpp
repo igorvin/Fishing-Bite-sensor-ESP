@@ -44,7 +44,9 @@ bite::Pattern errorCue;
 bite::ArmAssist armAssist;
 bite::EventLog<32> journal;
 bite::State loggedState=bite::State::Fault;
-uint32_t heartbeatSince=0;
+uint32_t heartbeatSince=0,settleLogAt=0;
+// The long "armed" beep sounds when ARMED is actually reached after an explicit ARM request.
+bool armBeepPending=false;
 bite::CsvBuffer<2048> csvBuffer;
 bite::Calibration previousCalibration=bite::Calibration::None;
 bite::StateClock apClock,disarmedClock;
@@ -93,7 +95,11 @@ void applyOutputs(uint32_t now){
     if(!pwmOK)return;
     // Passive buzzer: 100% volume maps to 50% carrier duty, never DC.
     ledcWriteChannel(0,(alarmOn||beepOn||cueOn)?(uint32_t(volume)*512u/100u):0);
-    ledcWriteChannel(1,armed?uint32_t(greenLevel)*255/100:0);
+    // Green: solid when ARMED; blinking while an ARM request is still settling/calibrating/pending.
+    auto st=sensor.state();
+    bool arming=!armed&&(armAssist.pending()||(sensor.desiredArmed()&&(st==bite::State::Settling||st==bite::State::Calibrating)));
+    bool greenOn=armed||(arming&&bite::elapsed(now,heartbeatSince)%500<250);
+    ledcWriteChannel(1,greenOn?uint32_t(greenLevel)*255/100:0);
     ledcWriteChannel(2,redOn?uint32_t(redLevel)*255/100:0);
 }
 void initOutputs(){
@@ -143,8 +149,8 @@ void setArmed(bool value,uint32_t now,bite::Source source){
     if(!sensor.setArmed(value,now)){armUi=false;notice=tr("Cannot arm: IMU fault","Нельзя включить охрану: ошибка IMU");note(now,bite::Log::Arm,uint8_t(source),value,bite::Refused);return;}
     note(now,bite::Log::Arm,uint8_t(source),value,uint8_t(sensor.state()));
     armUi=sensor.desiredArmed();db.set(kk::armedSw,armUi);
-    if(value&&!was){apClock.enter(now);if(sensor.state()!=bite::State::Calibrating)beep.start(now,300);}
-    if(!value){disarmedClock.enter(now);sleepAttempted=false;beep.start(now,120);enterConfig(now);}
+    if(value&&!was){apClock.enter(now);armBeepPending=true;}
+    if(!value){armBeepPending=false;disarmedClock.enter(now);sleepAttempted=false;beep.start(now,120);enterConfig(now);}
 }
 void updateBattery(){
     uint32_t mv=0;for(int i=0;i<8;++i)mv+=analogReadMilliVolts(board::battery);
@@ -489,6 +495,14 @@ void loop(){
     // a few times once untouched. This only calibrates; it never arms.
     bool retryEligible=sensor.state()==bite::State::Disarmed&&!sensor.desiredArmed()&&sensor.healthy()&&!sensor.calibrated()&&calibration==bite::Calibration::Moving&&!armAssist.pending();
     if(armAssist.retryDue(now,retryEligible,button.released())){sensor.beginCalibration(now);note(now,bite::Log::CalRetry,armAssist.retries(),bite::ArmAssist::maxRetries);}
+    if(!sensor.desiredArmed())armBeepPending=false;
+    if(armBeepPending&&sensor.state()==bite::State::Armed){armBeepPending=false;beep.start(now,300);}
+    // Explain a long SETTLING: every 3 s, how often stillness was broken and by what.
+    if(sensor.state()==bite::State::Settling){
+        if(loggedState!=bite::State::Settling)settleLogAt=now;
+        else if(bite::elapsed(now,settleLogAt)>=3000){const auto& t=sensor.telemetry();settleLogAt=now;
+            if(t.settleResets)note(now,bite::Log::Settling,uint8_t(std::min<uint32_t>(t.settleResets,255)),t.settleCause,uint8_t(std::min(255.f,t.settleLimit*1000.f+.5f)),t.settleValue);}
+    }
     if(sensor.state()!=loggedState){note(now,bite::Log::State,uint8_t(loggedState),uint8_t(sensor.state()));loggedState=sensor.state();}
     if(csv&&csvBuffer.size()){char chunk[128];int available=Serial.availableForWrite();if(available>0){size_t n=csvBuffer.peek(chunk,std::min<size_t>(sizeof(chunk),size_t(available)));csvBuffer.consume(Serial.write(reinterpret_cast<const uint8_t*>(chunk),n));}}
     applyOutputs(now);

@@ -141,6 +141,19 @@ std::vector<std::pair<const char*,std::function<void()>>> tests={
   e=LogEntry{0,Log::Arm,uint8_t(Source::Button),1,Refused,0};formatLog(e,line,sizeof(line));require(std::strstr(line,"refused: IMU fault"),"refusal");
   e=LogEntry{0,Log::Button,uint8_t(ButtonAction::ToggleArm),0,0,0};formatLog(e,line,sizeof(line));require(std::strstr(line,"toggle ARM"),"button action");
   char tiny[8];int n=formatLog(e,tiny,sizeof(tiny));require(n>0&&std::strlen(tiny)==7,"truncates safely");}},
+{"settling-restarts-are-explained",[]{
+  // Field log 2026-11-23: ARM -> SETTLING, but a hand on the sensor kept restarting the 1.5 s stillness timer.
+  SensorCore c;Config cfg;c.configure(cfg);uint32_t t=calibrate(c);require(c.setArmed(true,t)&&c.state()==State::Settling,"armed request settles first");
+  require(c.telemetry().settleResets==0,"fresh SETTLING has no restarts");
+  for(int i=0;i<300;++i){t+=10;c.update({(i%20==0)?.02f:0.f,0,1},t);}
+  require(c.state()==State::Settling,"a jolt every 200 ms never lets it arm");
+  require(c.telemetry().settleResets>=20&&c.telemetry().settleCause==1&&c.telemetry().settleValue>.019f&&c.telemetry().settleLimit>.0059f&&c.telemetry().settleLimit<.0061f,"restarts, cause and jolt size recorded");
+  for(int i=0;i<160;++i){t+=10;c.update({0,0,1},t);}
+  require(c.state()==State::Armed,"1.5 s of stillness then arms");
+  c.setArmed(false,t);c.setArmed(true,t);require(c.telemetry().settleResets==0,"counters restart with each SETTLING");
+  char line[200];LogEntry e{1000,Log::Settling,25,1,6,.012f};formatLog(e,line,sizeof(line));
+  require(std::strstr(line,"still SETTLING")&&std::strstr(line,"restarted 25 times")&&std::strstr(line,"jolt 0.0120 g (limit 0.006)"),"journal text for jolts");
+  e=LogEntry{1000,Log::Settling,255,2,6,1.2f};formatLog(e,line,sizeof(line));require(std::strstr(line,"255+ times")&&std::strstr(line,"|a| 1.200 g"),"journal text for magnitude");}},
 {"timestamp-rollover",[]{SensorCore c;uint32_t t=UINT32_MAX-1000;c.update({0,0,1},t);c.beginCalibration(t);for(int i=0;i<201;++i){t+=10;c.update({0,0,1},t);}require(c.calibrated(),"calibration spans rollover");}}
 };
 int failures=0;for(auto& test:tests){try{test.second();std::printf("PASS: %s\n",test.first);}catch(const std::exception& e){++failures;std::fprintf(stderr,"FAIL: %s: %s\n",test.first,e.what());}}

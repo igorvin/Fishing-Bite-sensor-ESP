@@ -237,7 +237,7 @@ The **Page** menu at the top has three sections: *Status*, *Sensor* and *Setting
 
 1. **Power on or wake the sensor.** Hold the button for about 1 second until it beeps. The sensor measures the background straight away, so **keep it still for 2 seconds**.
 2. **Mount the sensor on the rod** and put the rod on its rest.
-3. **Arm.** Hold the button for 1–3 seconds: a short beep sounds at 1 second, then release; a confirmation beep follows. The sensor waits 1.5 seconds for the rod to settle (*SETTLING*), then the **green LED** turns on: armed. If the sensor has not been calibrated yet, it starts calibrating 1 second after you release the button (do not touch it for 2 seconds).
+3. **Arm.** Hold the button for 1–3 seconds: a short beep sounds at 1 second, then release. The **green LED blinks** while the sensor waits for 1.5 seconds of complete stillness (*SETTLING*); any touch restarts that wait. When the green LED stays on and a **long beep** sounds, it is armed. Do not press again while green is blinking: a second press disarms. If the sensor has not been calibrated yet, it starts calibrating 1 second after you release the button (do not touch it for 2 seconds).
 4. **Bite:** red LED and buzzer on the sensor, screen and vibration on the hub. The signal repeats while the line keeps moving.
 5. **Picked up the rod?** No need to disarm: the sensor pauses alarms and re-arms by itself once the rod is still again, in its new position.
 6. **Disarm** with the same 1–3 second hold: the green LED goes out and you hear a short beep.
@@ -265,7 +265,8 @@ The **Page** menu at the top has three sections: *Status*, *Sensor* and *Setting
 | Situation | Green | Red | Buzzer | Hub |
 |---|---|---|---|---|
 | Awake, disarmed | — | short flash every 5 s | short beep when disarming | — |
-| Armed | on | short flash every 5 s | beep when arming | — |
+| Arming (SETTLING) | blinking | short flash every 5 s | — | — |
+| Armed | on | short flash every 5 s | long beep when ARMED is reached | — |
 | Deep sleep | — | — | — | — |
 | **ARM cancelled**: the sensor moved during calibration | — | 3 flashes | 3 short beeps | — |
 | Bite (event 1) | on | flash | short signal | screen + 300 ms vibration |
