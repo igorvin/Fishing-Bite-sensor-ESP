@@ -1,0 +1,160 @@
+{
+  "primitiveId": "e544",
+  "pins": [
+    {
+      "primitiveId": "e544-e4",
+      "noConnected": false,
+      "pinNumber": "D0",
+      "pinName": "D0",
+      "x": 345,
+      "y": 470,
+      "rotation": 180,
+      "pinLength": 9.841999999999985,
+      "pinType": "BI"
+    },
+    {
+      "primitiveId": "e544-e8",
+      "noConnected": false,
+      "pinNumber": "D1",
+      "pinName": "D1",
+      "x": 345,
+      "y": 460,
+      "rotation": 180,
+      "pinLength": 9.841999999999985,
+      "pinType": "BI"
+    },
+    {
+      "primitiveId": "e544-e12",
+      "noConnected": false,
+      "pinNumber": "D2",
+      "pinName": "D2",
+      "x": 345,
+      "y": 450,
+      "rotation": 180,
+      "pinLength": 9.841999999999985,
+      "pinType": "BI"
+    },
+    {
+      "primitiveId": "e544-e16",
+      "noConnected": true,
+      "pinNumber": "D3",
+      "pinName": "D3",
+      "x": 345,
+      "y": 440,
+      "rotation": 180,
+      "pinLength": 9.841999999999985,
+      "pinType": "BI"
+    },
+    {
+      "primitiveId": "e544-e20",
+      "noConnected": false,
+      "pinNumber": "D4",
+      "pinName": "D4",
+      "x": 345,
+      "y": 430,
+      "rotation": 180,
+      "pinLength": 9.841999999999985,
+      "pinType": "BI"
+    },
+    {
+      "primitiveId": "e544-e24",
+      "noConnected": false,
+      "pinNumber": "D5",
+      "pinName": "D5",
+      "x": 345,
+      "y": 420,
+      "rotation": 180,
+      "pinLength": 9.841999999999985,
+      "pinType": "BI"
+    },
+    {
+      "primitiveId": "e544-e28",
+      "noConnected": true,
+      "pinNumber": "D6",
+      "pinName": "D6",
+      "x": 345,
+      "y": 410,
+      "rotation": 180,
+      "pinLength": 9.841999999999985,
+      "pinType": "BI"
+    },
+    {
+      "primitiveId": "e544-e32",
+      "noConnected": false,
+      "pinNumber": "D7",
+      "pinName": "D7",
+      "x": 460,
+      "y": 410,
+      "rotation": 0,
+      "pinLength": 9.841999999999985,
+      "pinType": "BI"
+    },
+    {
+      "primitiveId": "e544-e36",
+      "noConnected": true,
+      "pinNumber": "D8",
+      "pinName": "D8",
+      "x": 460,
+      "y": 420,
+      "rotation": 0,
+      "pinLength": 9.841999999999985,
+      "pinType": "BI"
+    },
+    {
+      "primitiveId": "e544-e40",
+      "noConnected": false,
+      "pinNumber": "D9",
+      "pinName": "D9",
+      "x": 460,
+      "y": 430,
+      "rotation": 0,
+      "pinLength": 9.841999999999985,
+      "pinType": "BI"
+    },
+    {
+      "primitiveId": "e544-e44",
+      "noConnected": true,
+      "pinNumber": "D10",
+      "pinName": "D10",
+      "x": 460,
+      "y": 440,
+      "rotation": 0,
+      "pinLength": 9.841999999999985,
+      "pinType": "BI"
+    },
+    {
+      "primitiveId": "e544-e48",
+      "noConnected": true,
+      "pinNumber": "3V3",
+      "pinName": "3V3",
+      "x": 460,
+      "y": 450,
+      "rotation": 0,
+      "pinLength": 9.841999999999985,
+      "pinType": "BI"
+    },
+    {
+      "primitiveId": "e544-e52",
+      "noConnected": false,
+      "pinNumber": "GND",
+      "pinName": "GND",
+      "x": 460,
+      "y": 460,
+      "rotation": 0,
+      "pinLength": 9.841999999999985,
+      "pinType": "BI"
+    },
+    {
+      "primitiveId": "e544-e56",
+      "noConnected": false,
+      "pinNumber": "5V",
+      "pinName": "5V",
+      "x": 460,
+      "y": 470,
+      "rotation": 0,
+      "pinLength": 9.841999999999985,
+      "pinType": "BI"
+    }
+  ],
+  "success": true
+}

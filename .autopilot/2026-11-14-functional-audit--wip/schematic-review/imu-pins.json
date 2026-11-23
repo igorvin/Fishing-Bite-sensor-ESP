@@ -1,0 +1,138 @@
+{
+  "primitiveId": "e481",
+  "pins": [
+    {
+      "primitiveId": "e481-e3",
+      "noConnected": false,
+      "pinNumber": "1",
+      "pinName": "Vin",
+      "x": 595,
+      "y": 475,
+      "rotation": 180,
+      "pinLength": 20,
+      "pinType": "Undefined"
+    },
+    {
+      "primitiveId": "e481-e7",
+      "noConnected": true,
+      "pinNumber": "2",
+      "pinName": "3v3",
+      "x": 595,
+      "y": 465,
+      "rotation": 180,
+      "pinLength": 20,
+      "pinType": "Undefined"
+    },
+    {
+      "primitiveId": "e481-e11",
+      "noConnected": false,
+      "pinNumber": "3",
+      "pinName": "GND",
+      "x": 595,
+      "y": 455,
+      "rotation": 180,
+      "pinLength": 20,
+      "pinType": "Undefined"
+    },
+    {
+      "primitiveId": "e481-e15",
+      "noConnected": false,
+      "pinNumber": "4",
+      "pinName": "SCL",
+      "x": 595,
+      "y": 445,
+      "rotation": 180,
+      "pinLength": 20,
+      "pinType": "Undefined"
+    },
+    {
+      "primitiveId": "e481-e19",
+      "noConnected": false,
+      "pinNumber": "5",
+      "pinName": "SDA",
+      "x": 595,
+      "y": 435,
+      "rotation": 180,
+      "pinLength": 20,
+      "pinType": "Undefined"
+    },
+    {
+      "primitiveId": "e481-e23",
+      "noConnected": true,
+      "pinNumber": "6",
+      "pinName": "CS",
+      "x": 595,
+      "y": 425,
+      "rotation": 180,
+      "pinLength": 20,
+      "pinType": "Undefined"
+    },
+    {
+      "primitiveId": "e481-e27",
+      "noConnected": true,
+      "pinNumber": "7",
+      "pinName": "SDO/SAO",
+      "x": 595,
+      "y": 415,
+      "rotation": 180,
+      "pinLength": 20,
+      "pinType": "Undefined"
+    },
+    {
+      "primitiveId": "e481-e31",
+      "noConnected": true,
+      "pinNumber": "8",
+      "pinName": "SDX",
+      "x": 695,
+      "y": 425,
+      "rotation": 0,
+      "pinLength": 20,
+      "pinType": "Undefined"
+    },
+    {
+      "primitiveId": "e481-e35",
+      "noConnected": true,
+      "pinNumber": "9",
+      "pinName": "SCX",
+      "x": 695,
+      "y": 435,
+      "rotation": 0,
+      "pinLength": 20,
+      "pinType": "Undefined"
+    },
+    {
+      "primitiveId": "e481-e39",
+      "noConnected": true,
+      "pinNumber": "10",
+      "pinName": "IN1",
+      "x": 695,
+      "y": 445,
+      "rotation": 0,
+      "pinLength": 20,
+      "pinType": "Undefined"
+    },
+    {
+      "primitiveId": "e481-e43",
+      "noConnected": true,
+      "pinNumber": "11",
+      "pinName": "IN2",
+      "x": 695,
+      "y": 455,
+      "rotation": 0,
+      "pinLength": 20,
+      "pinType": "Undefined"
+    },
+    {
+      "primitiveId": "e481-e47",
+      "noConnected": true,
+      "pinNumber": "12",
+      "pinName": "OCS",
+      "x": 695,
+      "y": 465,
+      "rotation": 0,
+      "pinLength": 20,
+      "pinType": "Undefined"
+    }
+  ],
+  "success": true
+}

@@ -1,0 +1,79 @@
+Processing xiao_esp32c3 (board: seeed_xiao_esp32c3; platform: platformio/espressif32@8.0.0; framework: arduino)
+--------------------------------------------------------------------------------
+Verbose mode can be enabled via `-v, --verbose` option
+CONFIGURATION: https://docs.platformio.org/page/boards/espressif32/seeed_xiao_esp32c3.html
+PLATFORM: Espressif 32 (8.0.0) > Seeed Studio XIAO ESP32C3
+HARDWARE: ESP32C3 160MHz, 320KB RAM, 4MB Flash
+DEBUG: Current (cmsis-dap) External (cmsis-dap, esp-bridge, esp-builtin, esp-prog, iot-bus-jtag, jlink, minimodule, olimex-arm-usb-ocd, olimex-arm-usb-ocd-h, olimex-arm-usb-tiny-h, olimex-jtag-tiny, tumpa)
+PACKAGES: 
+ - framework-arduinoespressif32 @ 4.30312.261113 (3.3.12) 
+ - framework-arduinoespressif32-esp32c3-libs @ 3.3.12 
+ - tool-esptool @ 2.50400.0 (5.4.0) 
+ - tool-riscv32-esp-elf-gdb @ 12.1.0+20221002 
+ - tool-xtensa-esp-elf-gdb @ 12.1.0+20221002 
+ - toolchain-riscv32-esp @ 14.2.0+20260121 
+ - toolchain-xtensa-esp-elf @ 14.2.0+20260121
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 59 compatible libraries
+Scanning dependencies...
+Dependency Graph
+|-- GyverDB @ 1.4.4
+|-- Settings @ 1.4.3
+|-- EncButton @ 3.7.6
+|-- Adafruit LSM6DS @ 4.7.4
+|-- Adafruit Unified Sensor @ 1.1.15
+|-- Adafruit BusIO @ 1.17.4
+|-- LittleFS @ 3.3.12
+|-- WiFi @ 3.3.12
+|-- Wire @ 3.3.12
+Building in release mode
+Retrieving maximum program size .pio/build/xiao_esp32c3/firmware.elf
+Checking size .pio/build/xiao_esp32c3/firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [=         ]  12.7% (used 41652 bytes from 327680 bytes)
+Flash: [========= ]  86.7% (used 1136243 bytes from 1310720 bytes)
+========================= [SUCCESS] Took 2.31 seconds =========================
+
+Processing seeed_xiao_esp32s3 (board: seeed_xiao_esp32s3; platform: platformio/espressif32@8.0.0; framework: arduino)
+--------------------------------------------------------------------------------
+Verbose mode can be enabled via `-v, --verbose` option
+CONFIGURATION: https://docs.platformio.org/page/boards/espressif32/seeed_xiao_esp32s3.html
+PLATFORM: Espressif 32 (8.0.0) > Seeed Studio XIAO ESP32S3
+HARDWARE: ESP32S3 240MHz, 320KB RAM, 8MB Flash
+DEBUG: Current (cmsis-dap) External (cmsis-dap, esp-bridge, esp-builtin, esp-prog, iot-bus-jtag, jlink, minimodule, olimex-arm-usb-ocd, olimex-arm-usb-ocd-h, olimex-arm-usb-tiny-h, olimex-jtag-tiny, tumpa)
+PACKAGES: 
+ - framework-arduinoespressif32 @ 4.30312.261113 (3.3.12) 
+ - framework-arduinoespressif32-esp32s3-libs @ 3.3.12 
+ - tool-esptool @ 2.50400.0 (5.4.0) 
+ - tool-riscv32-esp-elf-gdb @ 12.1.0+20221002 
+ - tool-xtensa-esp-elf-gdb @ 12.1.0+20221002 
+ - toolchain-riscv32-esp @ 14.2.0+20260121 
+ - toolchain-xtensa-esp-elf @ 14.2.0+20260121
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 59 compatible libraries
+Scanning dependencies...
+Dependency Graph
+|-- GyverDB @ 1.4.4
+|-- Settings @ 1.4.3
+|-- EncButton @ 3.7.6
+|-- Adafruit LSM6DS @ 4.7.4
+|-- Adafruit Unified Sensor @ 1.1.15
+|-- Adafruit BusIO @ 1.17.4
+|-- LittleFS @ 3.3.12
+|-- WiFi @ 3.3.12
+|-- Wire @ 3.3.12
+Building in release mode
+Retrieving maximum program size .pio/build/seeed_xiao_esp32s3/firmware.elf
+Checking size .pio/build/seeed_xiao_esp32s3/firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [==        ]  15.9% (used 52156 bytes from 327680 bytes)
+Flash: [===       ]  31.2% (used 1043241 bytes from 3342336 bytes)
+========================= [SUCCESS] Took 2.15 seconds =========================
+
+Environment         Status    Duration
+------------------  --------  ------------
+xiao_esp32c3        SUCCESS   00:00:02.307
+seeed_xiao_esp32s3  SUCCESS   00:00:02.146
+========================= 2 succeeded in 00:00:04.453 =========================

@@ -1,1313 +1,432 @@
-/*******************************************************
-  Fishing Bite Sensor – ESP32 (Seeed XIAO ESP32-S3 / ESP32-C6 / ESP32-C3)
-  - Accelerometer: LSM6DS3 (Adafruit LSM6DS library)
-  - UI/Settings:   GyverDBFile + SettingsGyver
-  - Storage:       LittleFS
-  - ESP-NOW:       Sends alarms to central ESP hub
-
-  UI change (Status group):
-    - State: keep
-    - remove all "led" rows
-    - Accelerometer: OK green / ERROR red (text color)
-    - remove Language row from Status
-    - Battery and Δg: keep
-    - Uptime shows minutes
-
-  Option A implemented:
-    - Menu selector splits UI into 3 pages:
-        0) Status
-        1) Sensor
-        2) Network
-********************************************************/
-
+// Sensor bench release. Portable algorithms are shared with tests/replay.
 #include <Arduino.h>
+#include <atomic>
 #include <Wire.h>
 #include <WiFi.h>
 #include <esp_now.h>
-#include <esp_idf_version.h>
 #include <esp_sleep.h>
 #include <esp_task_wdt.h>
-#if ESP_IDF_VERSION_MAJOR >= 5
-  #include <esp_wifi_types.h>
-#endif
-
-#include <Adafruit_Sensor.h>
-#include <Adafruit_LSM6DS3.h>
-
 #include <LittleFS.h>
+#include <esp_partition.h>
 #include <GyverDBFile.h>
 #include <SettingsGyver.h>
-#include <EncButton.h>
-
-#if !defined(ARDUINO_XIAO_ESP32S3) && !defined(ARDUINO_XIAO_ESP32C6) && !defined(ARDUINO_XIAO_ESP32C3)
-#warning "This sketch is tuned for Seeed XIAO ESP32-S3 / ESP32-C6 / ESP32-C3. Check pin mappings if using another board."
+#include <driver/gpio.h>
+#include <soc/soc_caps.h>
+#if SOC_RTCIO_INPUT_OUTPUT_SUPPORTED
+#include <driver/rtc_io.h>
 #endif
+#include "BoardProfile.h"
+#include "ImuDriver.h"
+#include "SensorCore.h"
+#include "CsvBuffer.h"
+#include "ConfigDatabase.h"
+#include "ImuSession.h"
+#include "PowerButton.h"
+#include "MobileUi.h"
+#include "../shared/StartupRadio.h"
 
-// ==============================
-//            PINS (Example: XIAO ESP32-C3 style)
-// ==============================
-#define LED_GREEN   D7
-#define LED_RED     D8
-#define BUZZER      D9
-#define BUTTON      D6
+// Keep original key hashes and 22-byte wire contract. New semantics use new keys.
+DB_KEYS(kk,name,deltaG,shortPulse,pulsePeriod,contThresh,armedSw,langIdx,testAlarm,apPass,saveRB,buzVol,ledRedLvl,ledGreenLvl,espNowEn,hubMac);
+struct __attribute__((packed)) BitePacket {char rodName[16];uint8_t eventType,batteryPct;float deltaG;};
+static_assert(sizeof(BitePacket)==22,"Hub wire compatibility");
+bite::ConfigDatabase<GyverDBFile> db(&LittleFS,"/config.db");
+SettingsGyver sett("Fishing Bite Sensor - bench",&db);
+bite::PowerButton button;
+bite::LowBatteryGuard lowBattery;
+ImuDriver imu;
+bite::SensorCore sensor;
+bite::ImuSession imuSession;
+bite::Config draft;
+bite::Pulse alarmPulse,beep;
+bite::CsvBuffer<2048> csvBuffer;
+bite::Calibration previousCalibration=bite::Calibration::None;
+bite::StateClock apClock,disarmedClock;
+bool storageOK=false,pwmOK=false,showDetails=false;
+bool apActive=true,radioReady=false,radioEn=false,csv=false,armUi=false;
+bool saveConfig=false,calRequest=false,testRequest=false,networkRequest=false;
+bool sleepAttempted=false;
+uint8_t page=0,language=0,mode=0;
+uint16_t pulseMs=120,volume=100,greenLevel=100,redLevel=100;
+String sensorName="BiteSensor",apPassword="",hubAddress="";
+String draftName,draftPass,draftMac,notice="",sleepNotice="",radioNotice="";
+bool draftRadio=false;
+uint8_t peerMac[6]={0};
+startup::Sensor registration;uint32_t sensorBoot=1;
+startup::Ring<startup::Message,4> controlInbox;portMUX_TYPE controlMux=portMUX_INITIALIZER_UNLOCKED;
+uint32_t controlTx=0,controlRx=0;char serialCommand[48]{};size_t serialLength=0;bool serialOverflow=false;
+uint32_t lastBattery=0,lastRate=0,rateSamples=0;
+uint32_t pulseCount=0,readErrors=0,noNew=0,csvDrops=0,sendErrors=0,saveNonce=0;
+uint32_t rebootAt=0;
+float sampleRate=0,vbat=0;int batteryPct=0;
+std::atomic<uint32_t> txSuccess{0},txFail{0};
+// Survive deep sleep (RTC slow memory); reported by the USB "status" command.
+RTC_DATA_ATTR uint32_t rtcSleeps=0,rtcShortWakes=0;RTC_DATA_ATTR char rtcLastSleep[12]="none";
+const char* wakeName="reset";
+const char* tr(const char* en,const char* ru){return language?ru:en;}
 
-#define PIN_PWR_CTRL D0
-#define PIN_BTN_IN   D1
+namespace ui {
+constexpr size_t menu=2000,lang=2001,arm=2002,algorithm=2003,threshold=2004,noise=2005,legacy=2006;
+constexpr size_t pulse=2007,period=2008,continuous=2009,suppress=2010,up=2011,tilt=2012,hold=2013;
+constexpr size_t vol=2014,green=2015,red=2016,name=2017,pass=2018,mac=2019,radio=2020,save=2021,cal=2022,test=2023,capture=2024;
+constexpr size_t state=2100,health=2101,xyz=2102,signals=2103,noiseInfo=2104,calInfo=2105,battery=2106,stats=2107,timing=2108,sleep=2109,radioInfo=2110,message=2111,details=2112,radioDetails=2113,batteryRaw=2114;
+}
 
-#define VBAT_PIN    D2
+void stopOutputs(){alarmPulse.stop();beep.stop();}
+void applyOutputs(uint32_t now){
+    bool alarmOn=alarmPulse.tick(now),beepOn=beep.tick(now);
+    if(!pwmOK)return;
+    // Passive buzzer: 100% volume maps to 50% carrier duty, never DC.
+    ledcWriteChannel(0,(alarmOn||beepOn)?(uint32_t(volume)*512u/100u):0);
+    ledcWriteChannel(1,sensor.state()==bite::State::Armed?uint32_t(greenLevel)*255/100:0);
+    ledcWriteChannel(2,alarmOn?uint32_t(redLevel)*255/100:0);
+}
+void initOutputs(){
+    // Separate frequencies/resolutions force separate timers in the pinned core.
+    bool a=ledcAttachChannel(board::buzzer,3000,10,0);
+    bool b=ledcAttachChannel(board::green,1000,8,1);
+    bool c=ledcAttachChannel(board::red,1000,8,2);
+    pwmOK=a&&b&&c;ledcWriteChannel(0,0);ledcWriteChannel(1,0);ledcWriteChannel(2,0);
+}
 
-#define I2C_SDA_PIN D4
-#define I2C_SCL_PIN D5
-
-// ==============================
-// LSM6DS3 CONFIG
-// ==============================
-const uint8_t LSM6_ADDR         = 0x6B;
-const float   MS2_PER_G         = 9.80665f;
-
-const uint8_t  TRIGGER_SAMPLES    = 3;
-const uint16_t LONG_PRESS_MS      = 1000;
-const uint16_t SAMPLE_INTERVAL_MS = 10;
-
-// ARM warmup after ARM (prevents instant false alarms)
-const uint32_t ARM_SETTLE_MS       = 1500;
-
-// --- Power button (BTN_IN) timings ---
-const uint32_t PWR_DEBOUNCE_MS    = 50;
-const uint32_t PWR_LONG_PRESS_MS  = 3000;
-
-// Time windows
-const uint32_t DISARMED_AP_GRACE_MS = 3UL * 60UL * 1000UL;
-const uint32_t ARMED_AP_WINDOW_MS   = 2UL * 60UL * 1000UL;
-
-// Battery read config
-const float    VBAT_VREF          = 3.30f;
-const float    VBAT_DIV           = 2.00f;
-const float    VBAT_CAL           = 1.00f;
-const uint16_t VBAT_SAMPLES       = 16;
-const uint16_t VBAT_ADC_MAX       = 4095;
-const uint32_t VBAT_PERIOD_MS     = 5000;
-
-// Low-battery ESP-NOW alert
-const int      LOW_BATT_THRESHOLD_PCT = 20;
-const int      LOW_BATT_HYSTERESIS    = 5;
-
-// ==============================
-// STATE
-// ==============================
-Adafruit_LSM6DS3 lsm6;
-bool imuOK = false, armed = false;
-
-uint32_t lastSample = 0, motionStartMs = 0, bootMs = 0;
-uint8_t  consecutiveTriggers = 0;
-float    baselineMagG = 1.0f;
-
-bool     inMotion = false, pulseOn = false;
-uint32_t pulseOffAt = 0, lastPulseStart = 0;
-
-// ARM warmup state
-uint32_t armAtMs = 0;
-bool     armWarmup = false;
-uint16_t warmupCnt = 0;
-float    warmupSumMag = 0.0f;
-bool     gravInited = false;
-
-// BUTTON (SW1) – ARM/DISARM
-Button btn(BUTTON);
-
-// POWER BUTTON (SW2 / BTN_IN) FSM – POWER OFF
-const bool PWRBTN_ACTIVE_LEVEL = LOW;
-bool     pwrBtnStableState   = !PWRBTN_ACTIVE_LEVEL;
-bool     pwrBtnPrevStable    = !PWRBTN_ACTIVE_LEVEL;
-uint32_t pwrBtnLastChangeMs  = 0;
-uint32_t pwrBtnPressStartMs  = 0;
-bool     pwrIgnoreFirstPress = true;
-
-// telemetry
-volatile float    g_lastDelta = 0.0f;
-volatile uint32_t g_alerts    = 0;
-
-// ARMED config window timer
-uint32_t wifiArmStart = 0;
-bool     wifiApActiveAfterArm = false;
-
-// Battery telemetry
-float    g_vbat_V = 0.0f;
-int      g_batt_pct = 0;
-uint32_t lastVbatMs = 0;
-bool     lowBattReported = false;
-
-// ==============================
-// ESP-NOW STATE
-// ==============================
-struct __attribute__((packed)) BitePacket {
-  char    rodName[16];
-  uint8_t eventType;     // 1 short/first, 2 continuous, 3 low battery
-  uint8_t batteryPct;    // 0..100
-  float   deltaG;
-};
-
-bool     cfg_espNowEn   = false;
-String   cfg_hubMacStr  = "";
-bool     espNowEnabled  = false;
-bool     espNowInited   = false;
-bool     hubMacValid    = false;
-uint8_t  hubMacAddr[6]  = {0};
-
-// ==============================
-// SETTINGS + DATABASE
-// ==============================
-// NOTE: GyverDB macro supports up to 15 keys; keep count <= 15
-DB_KEYS(
-  kk,
-  name, deltaG, shortPulse, pulsePeriod, contThresh,
-  armedSw, langIdx, testAlarm, apPass, saveRB,
-  buzVol, ledRedLvl, ledGreenLvl,
-  espNowEn, hubMac
-);
-
-GyverDBFile   db(&LittleFS, "/config.db");
-SettingsGyver sett("Fishing Bite Sensor", &db);
-
-// ==============================
-// LOCALIZATION
-// ==============================
-struct LangPack {
-  const char* grpMenu;
-  const char* grpGeneral;
-  const char* grpSensor;
-  const char* grpWiFi;
-  const char* grpStatus;
-  const char* grpEspNow;
-
-  const char* lblMenu;
-  const char* menuItems;
-
-  const char* lblLanguage;
-  const char* langHint;
-  const char* lblSensitivity;
-  const char* lblShortPulse;
-  const char* lblPulsePeriod;
-  const char* lblContThresh;
-  const char* lblArmedSwitch;
-
-  const char* lblName;
-  const char* lblApPass;
-  const char* lblSaveRestart;
-
-  const char* lblState;
-  const char* lblAccel;
-  const char* lblDeltaG;
-  const char* lblAlerts;
-  const char* lblUptime;
-  const char* lblBattery;
-
-  const char* lblEspNowEnable;
-  const char* lblHubMac;
-  const char* lblTestAlarm;
-
-  const char* valArmed;
-  const char* valDisarmed;
-  const char* valAccelOK;
-  const char* valAccelErr;
-
-  const char* msgNameBad;
-  const char* msgPassBad;
-  const char* msgSavedReboot;
-  const char* msgLangChanged;
-  const char* msgHubMacBad;
-};
-
-const LangPack LANG_EN = {
-  "Menu",
-  "General","Sensor","Wireless settings","Status","ESP-NOW",
-  "Menu", "Status\nSensor\nSettings",
-  "Language","(English / Русский)`",
-  "Sensitivity \xCE\x94g","Short pulse","Pulse period","Continuous threshold","Armed (web toggle)",
-  "Sensor name (AP SSID)","AP password (Min 8 chars.)","Save & Restart",
-  "State","Accelerometer","\xCE\x94g","Alerts","Uptime (min)","Battery",
-  "Enable ESP-NOW","Hub MAC (xx:xx..)","Calibrate baseline & test alarm",
-  "ARMED","DISARMED","OK","ERROR",
-  "Sensor name / SSID (1..32 chars.)",
-  "Password (min 8 chars.)",
-  "Saved. Rebooting to apply AP SSID/password...",
-  "Language changed. Refresh the page.",
-  "Hub MAC format invalid"
-};
-
-const LangPack LANG_RU = {
-  "Меню",
-  "Общие","Датчик","Настройки Wi-Fi","Статус","ESP-NOW",
-  "Меню", "Статус\nДатчик\nНастройки",
-  "Язык","(Русский / English)",
-  "Чувствительность Δg","Короткий импульс","Период импульсов","Порог непрерывности","Охрана (веб-переключатель)",
-  "Имя датчика (SSID AP)","Пароль AP (мин. 8 симв.)","Сохранить и перезагрузить",
-  "Состояние","Акселерометр","Δg","Срабатывания","Время работы (мин)","Батарея",
-  "Включить ESP-NOW","MAC хаба (XX:XX..)","Калибровка базы + тест",
-  "ОХРАНА","СНЯТО","ОК","ОШИБКА",
-  "Имя датчика / SSID 1–32 символов",
-  "Пароль (мин. 8 символов)",
-  "Сохранено. Перезагрузка для применения SSID/пароля...",
-  "Язык изменён. Обновите страницу.",
-  "Неверный формат MAC хаба"
-};
-
-String   cfg_name="BiteSensor", cfg_apPass="";
-float    cfg_deltaG=0.15f;
-uint16_t cfg_shortPulseMs=120, cfg_pulsePeriod=300, cfg_contThresh=250;
-bool     cfg_armedSw=false;
-
-// Language control
-int      cfg_langIdx=0;      // 0=EN, 1=RU
-bool     cfg_langRu=false;
-int      g_prevLangIdx=-1;
-
-inline const LangPack& L(){ return cfg_langRu?LANG_RU:LANG_EN; }
-
-// Output settings
-uint16_t cfg_buzVolPct   = 100;
-uint16_t cfg_ledRedPct   = 100;
-uint16_t cfg_ledGreenPct = 100;
-
-// ==============================
-// MENU PAGES (Option A)
-// ==============================
-static const char* DBK_UI_PAGE = "ui_page";
-uint8_t ui_page = 0;  // 0=Status, 1=Sensor, 2=Network
-static const size_t UI_PAGE = 2000;
-
-// ==============================
-// AUTO-DISARM UI/DB (string keys)
-// ==============================
-const char* DBK_AUTO_DISARM_EN = "autoDisarmEn";
-const char* DBK_AUTO_DETECT    = "autoDetect";
-const char* DBK_AUTO_UP_DEG    = "autoUpDeg";
-const char* DBK_AUTO_TILT_DEG  = "autoTiltDeg";
-const char* DBK_AUTO_HOLD_MS   = "autoHoldMs";
-
-bool     cfg_autoDisarmEn = true;
-bool     cfg_autoDetect   = true;     // ON = fixed params
-float    cfg_autoUpDeg    = 25.0f;    // used when autoDetect OFF
-float    cfg_autoTiltDeg  = 35.0f;    // used when autoDetect OFF
-uint16_t cfg_autoHoldMs   = 120;      // used when autoDetect OFF
-
-// Fixed params when Auto Detect = ON
-static const float    FIX_UP_DEG   = 25.0f;
-static const float    FIX_TILT_DEG = 35.0f;
-static const uint16_t FIX_HOLD_MS  = 120;
-
-static const uint32_t AUTO_DISARM_MIN_ARM_MS = 4000;
-static const uint32_t BASELINE_STABLE_MS  = 600;
-static const float    BASELINE_DELTA_K    = 0.60f;
-
-struct Vec3 { float x,y,z; };
-static Vec3  gravF = {0,0,1};
-
-static bool     oriBaseValid = false;
-static float    basePitchDeg = 0.0f;
-static float    baseRollDeg  = 0.0f;
-
-static uint32_t baselineStableSince = 0;
-static uint32_t moveOverSince = 0;
-
-const float    MOVE_GRAV_ALPHA = 0.94f;
-const float    MOVE_MAG_MIN_G  = 0.75f;
-const float    MOVE_MAG_MAX_G  = 1.25f;
-
-// ==============================
-// BUZZER + LED PWM HELPERS (ESP32 family)
-// ==============================
-#ifdef ESP32
-  #define BUZZER_LEDC_CH 0
-  #define LED_GREEN_CH   1
-  #define LED_RED_CH     2
-
-  const uint8_t BUZZER_BITS = 10;   // 0..1023
-  const uint8_t LED_BITS    = 8;    // 0..255
-
-  static bool pwmReady = false;
-
-  inline void pwmWriteCh(uint8_t ch, uint32_t duty){
-#if ESP_IDF_VERSION_MAJOR >= 5
-    ledcWriteChannel(ch, duty);
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5,5,0)
+void onSent(const wifi_tx_info_t*,esp_now_send_status_t s){if(s==ESP_NOW_SEND_SUCCESS)txSuccess.fetch_add(1,std::memory_order_relaxed);else txFail.fetch_add(1,std::memory_order_relaxed);}
 #else
-    ledcWrite(ch, duty);
+void onSent(const uint8_t*,esp_now_send_status_t s){if(s==ESP_NOW_SEND_SUCCESS)txSuccess.fetch_add(1,std::memory_order_relaxed);else txFail.fetch_add(1,std::memory_order_relaxed);}
 #endif
-  }
-
-  void pwmInit() {
-#if ESP_IDF_VERSION_MAJOR >= 5
-    ledcAttachChannel(BUZZER, 3000, BUZZER_BITS, BUZZER_LEDC_CH);
-    ledcWriteChannel(BUZZER_LEDC_CH, 0);
-
-    ledcAttachChannel(LED_GREEN, 1000, LED_BITS, LED_GREEN_CH);
-    ledcAttachChannel(LED_RED,   1000, LED_BITS, LED_RED_CH);
-    ledcWriteChannel(LED_GREEN_CH, 0);
-    ledcWriteChannel(LED_RED_CH,   0);
-#else
-    ledcSetup(BUZZER_LEDC_CH, 3000, BUZZER_BITS);
-    ledcAttachPin(BUZZER, BUZZER_LEDC_CH);
-    pwmWriteCh(BUZZER_LEDC_CH, 0);
-
-    ledcSetup(LED_GREEN_CH, 1000, LED_BITS);
-    ledcSetup(LED_RED_CH,   1000, LED_BITS);
-    ledcAttachPin(LED_GREEN, LED_GREEN_CH);
-    ledcAttachPin(LED_RED,   LED_RED_CH);
-    ledcWrite(LED_GREEN_CH, 0);
-    ledcWrite(LED_RED_CH,   0);
-#endif
-    pwmReady = true;
-  }
-
-  inline uint16_t buzzerDuty(){
-    if (cfg_buzVolPct > 100) cfg_buzVolPct = 100;
-    return (uint16_t)((cfg_buzVolPct * ((1 << BUZZER_BITS) - 1)) / 100);
-  }
-
-  inline uint8_t ledDuty(uint16_t pct){
-    if (pct > 100) pct = 100;
-    return (uint8_t)((pct * ((1 << LED_BITS) - 1)) / 100);
-  }
-
-  inline void buzzStart(){
-    if (!pwmReady) return;
-    pwmWriteCh(BUZZER_LEDC_CH, buzzerDuty());
-  }
-
-  inline void buzzStop(){
-    if (!pwmReady) return;
-    pwmWriteCh(BUZZER_LEDC_CH, 0);
-  }
-
-  inline void setGreenLED(bool on){
-    if (!pwmReady) return;
-    pwmWriteCh(LED_GREEN_CH, on ? ledDuty(cfg_ledGreenPct) : 0);
-  }
-
-  inline void setRedLED(bool on){
-    if (!pwmReady) return;
-    pwmWriteCh(LED_RED_CH, on ? ledDuty(cfg_ledRedPct) : 0);
-  }
-#else
-  void pwmInit() {}
-  inline void buzzStart(){ digitalWrite(BUZZER, HIGH); }
-  inline void buzzStop(){  digitalWrite(BUZZER, LOW);  }
-  inline void setGreenLED(bool on){ digitalWrite(LED_GREEN, on ? HIGH : LOW); }
-  inline void setRedLED(bool on){   digitalWrite(LED_RED,   on ? HIGH : LOW); }
-#endif
-
-inline void longBeep(){ buzzStart(); delay(600); buzzStop(); }
-inline void shortBeep(){ buzzStart(); delay(150); buzzStop(); }
-
-// ==============================
-// HELPERS
-// ==============================
-static inline uint16_t clamp16(uint16_t v,uint16_t lo,uint16_t hi){return v<lo?lo:(v>hi?hi:v);}
-static inline float clampf(float v,float lo,float hi){return v<lo?lo:(v>hi?hi:v);}
-
-inline float mag3(float x,float y,float z){return sqrtf(x*x+y*y+z*z);}
-
-static inline float vMag(const Vec3& v){ return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z); }
-static inline float rad2deg(float r){ return r * 57.2957795f; }
-
-static void gravityToPitchRoll(const Vec3& g, float& pitchDeg, float& rollDeg) {
-  pitchDeg = rad2deg(atan2f(-g.x, sqrtf(g.y*g.y + g.z*g.z)));
-  rollDeg  = rad2deg(atan2f(g.y, g.z));
+void onControl(const esp_now_recv_info* info,const uint8_t* data,int len){
+ startup::Message message;if(!info||len<0||!startup::decode(data,size_t(len),info->src_addr,message.packet))return;
+ std::memcpy(message.mac.data(),info->src_addr,6);portENTER_CRITICAL(&controlMux);controlInbox.push(message);portEXIT_CRITICAL(&controlMux);
 }
-
-static inline bool accelMagOk(const Vec3& gNow) {
-  float m = vMag(gNow);
-  return (m >= MOVE_MAG_MIN_G && m <= MOVE_MAG_MAX_G);
+void radioEnd(){if(radioReady)esp_now_deinit();radioReady=false;registration.disable();portENTER_CRITICAL(&controlMux);controlInbox.clear();portEXIT_CRITICAL(&controlMux);}
+bool reconcileRadio(){
+    radioEnd();radioNotice="OFF";
+    if(!radioEn)return true;
+    uint8_t candidate[6];if(!bite::parseMac(hubAddress.c_str(),candidate)){radioNotice="invalid MAC";return false;}
+    if(WiFi.getMode()==WIFI_OFF)WiFi.mode(WIFI_STA);
+    if(esp_now_init()!=ESP_OK){radioNotice="init failed";return false;}
+    if(esp_now_register_send_cb(onSent)!=ESP_OK||esp_now_register_recv_cb(onControl)!=ESP_OK){esp_now_deinit();radioNotice="callback failed";return false;}
+    esp_now_peer_info_t p{};memcpy(p.peer_addr,candidate,6);p.channel=0;p.encrypt=false;p.ifidx=WIFI_IF_STA;
+    if(esp_now_add_peer(&p)!=ESP_OK){esp_now_deinit();radioNotice="peer failed";return false;}
+    memcpy(peerMac,candidate,6);registration.begin(peerMac,sensorBoot);radioReady=true;radioNotice="ready (MAC delivery only)";return true;
 }
-
-// ==============================
-// ESP-NOW HELPERS
-// ==============================
-bool parseMac(const String& mac, uint8_t out[6]) {
-  if (mac.length() != 17) return false;
-  int vals[6];
-  if (sscanf(mac.c_str(), "%x:%x:%x:%x:%x:%x",
-             &vals[0], &vals[1], &vals[2],
-             &vals[3], &vals[4], &vals[5]) != 6) return false;
-  for (int i=0;i<6;i++) out[i] = (uint8_t)vals[i];
-  return true;
+bool sendPacket(uint8_t type){
+    if(!radioReady)return false;
+    BitePacket packet{};startup::copyName(packet.rodName,sensorName.c_str());
+    packet.eventType=type;packet.batteryPct=uint8_t(constrain(batteryPct,0,100));
+    packet.deltaG=sensor.config().legacyMode?sensor.telemetry().signal.legacy:sensor.telemetry().signal.dynamic;
+    esp_err_t result=esp_now_send(peerMac,reinterpret_cast<uint8_t*>(&packet),sizeof(packet));
+    if(result!=ESP_OK){++sendErrors;return false;}return true;
 }
-
-#if ESP_IDF_VERSION_MAJOR >= 5
-void onEspNowSent(const wifi_tx_info_t *info, esp_now_send_status_t status) { (void)info; (void)status; }
-#else
-void onEspNowSent(const uint8_t *mac, esp_now_send_status_t status) { (void)mac; (void)status; }
-#endif
-
-void espNowBegin() {
-  if (!espNowEnabled || espNowInited || !hubMacValid) return;
-
-  if (WiFi.getMode() == WIFI_OFF) WiFi.mode(WIFI_STA);
-
-  if (esp_now_init() != ESP_OK) {
-    Serial.println("ESP-NOW init failed");
-    return;
-  }
-  espNowInited = true;
-  esp_now_register_send_cb(onEspNowSent);
-
-  esp_now_peer_info_t peer{};
-  memcpy(peer.peer_addr, hubMacAddr, 6);
-  peer.channel = 0;
-  peer.encrypt = false;
-
-  if (esp_now_add_peer(&peer) != ESP_OK) Serial.println("ESP-NOW add peer failed");
-  else                                   Serial.println("ESP-NOW peer added");
+void enterConfig(uint32_t now){
+    WiFi.mode(WIFI_AP_STA);
+    apActive=WiFi.softAP(sensorName.c_str(),apPassword.length()?apPassword.c_str():nullptr);
+    WiFi.setSleep(true);apClock.enter(now);
 }
-
-void espNowEnd() {
-  if (!espNowInited) return;
-  esp_now_deinit();
-  espNowInited = false;
-  Serial.println("ESP-NOW deinit");
+void setArmed(bool value,uint32_t now){
+    stopOutputs();bool was=sensor.desiredArmed();
+    if(!sensor.setArmed(value,now)){armUi=false;notice=tr("Cannot arm: IMU fault","Нельзя включить охрану: ошибка IMU");return;}
+    armUi=sensor.desiredArmed();db.set(kk::armedSw,armUi);
+    if(value&&!was){apClock.enter(now);if(sensor.state()!=bite::State::Calibrating)beep.start(now,300);}
+    if(!value){disarmedClock.enter(now);sleepAttempted=false;beep.start(now,120);enterConfig(now);}
 }
-
-void sendBitePacket(uint8_t eventType) {
-  if (!espNowEnabled || !espNowInited || !hubMacValid) return;
-
-  BitePacket pkt{};
-  strlcpy(pkt.rodName, cfg_name.c_str(), sizeof(pkt.rodName));
-  pkt.eventType  = eventType;
-  pkt.batteryPct = (uint8_t) constrain(g_batt_pct, 0, 100);
-  pkt.deltaG     = g_lastDelta;
-
-  esp_now_send(hubMacAddr, (uint8_t*)&pkt, sizeof(pkt));
+void updateBattery(){
+    uint32_t mv=0;for(int i=0;i<8;++i)mv+=analogReadMilliVolts(board::battery);
+    vbat=(mv/8.f)*.002f;
+    if(vbat>=4.18f)batteryPct=100;else if(vbat>=4.10f)batteryPct=90;else if(vbat>=3.98f)batteryPct=80;
+    else if(vbat>=3.85f)batteryPct=70;else if(vbat>=3.80f)batteryPct=60;else if(vbat>=3.75f)batteryPct=50;
+    else if(vbat>=3.70f)batteryPct=40;else if(vbat>=3.63f)batteryPct=30;else if(vbat>=3.55f)batteryPct=20;
+    else if(vbat>=3.45f)batteryPct=10;else batteryPct=0;
 }
-
-// ==============================
-// Wi-Fi MODES
-// ==============================
-void configureAP(const String& ssid,const String& pass){
-  WiFi.softAPdisconnect(true);
-  delay(50);
-  if (pass.length()>=8) WiFi.softAP(ssid.c_str(),pass.c_str());
-  else                  WiFi.softAP(ssid.c_str(),"");
-  delay(100);
-  Serial.printf("AP SSID: %s\n",ssid.c_str());
-  Serial.println(WiFi.softAPIP());
+bool flushSettings(){
+    if(!storageOK)return false;
+    // Force a dirty marker so false from update is a genuine write failure.
+    db.set("benchSave",++saveNonce);return db.update();
 }
-
-void wifiEnterConfigMode() {
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.setHostname(cfg_name.c_str());
-  configureAP(cfg_name, cfg_apPass);
-  WiFi.setSleep(true);
+void serviceRegistration(uint32_t now){
+ startup::Message message;
+ for(unsigned i=0;i<4;++i){portENTER_CRITICAL(&controlMux);bool present=controlInbox.pop(message);portEXIT_CRITICAL(&controlMux);if(!present)break;
+  if(registration.receive(message.mac.data(),message.packet)){++controlRx;if(registration.confirmed()){radioNotice="registered at startup (not live link)";Serial.printf("SENSOR registration confirmed node=%u\n",registration.node());}}
+ }
+ if(radioReady&&registration.due(now)){
+  auto packet=registration.announce(now,sensorName.c_str(),startup::batteryKnown(vbat),uint8_t(constrain(batteryPct,0,100)));
+  if(esp_now_send(peerMac,reinterpret_cast<const uint8_t*>(&packet),sizeof(packet))==ESP_OK)++controlTx;else ++sendErrors;
+ }
 }
-
-void wifiAfterArmWindow() {
-  WiFi.softAPdisconnect(true);
-  Serial.println("AP disabled after ARM window");
-
-  if (!espNowEnabled || !hubMacValid) {
-    WiFi.disconnect(true, true);
-    delay(50);
-    WiFi.mode(WIFI_OFF);
-    Serial.println("WiFi fully OFF (no ESP-NOW)");
-  }
-}
-
-// ==============================
-// ALERT PULSES / LEDS
-// ==============================
-inline void stopPulse(){
-  pulseOn=false;
-  buzzStop();
-  setRedLED(false);
-}
-
-inline void updateGreenLED(){ setGreenLED(armed); }
-
-inline void startPulse(uint32_t now, uint8_t eventType){
-  pulseOn        = true;
-  lastPulseStart = now;
-  pulseOffAt     = now + cfg_shortPulseMs;
-  setRedLED(true);
-  buzzStart();
-  g_alerts = g_alerts + 1;
-  sendBitePacket(eventType);
-}
-
-inline void startTestPulse() {
-  uint32_t now = millis();
-  pulseOn        = true;
-  lastPulseStart = now;
-  pulseOffAt     = now + cfg_shortPulseMs;
-  setRedLED(true);
-  buzzStart();
-}
-
-// ==============================
-// Battery read + mapping
-// ==============================
-float readVbat() {
-  uint32_t acc = 0;
-  analogRead(VBAT_PIN);                    // dummy
-  for (int i=0;i<VBAT_SAMPLES;i++) acc += analogRead(VBAT_PIN);
-  float adc = acc / float(VBAT_SAMPLES);
-  float v = (adc / VBAT_ADC_MAX) * VBAT_VREF * VBAT_DIV * VBAT_CAL;
-  return v;
-}
-
-int vbatToPercent(float v) {
-  if      (v >= 4.18f) return 100;
-  else if (v >= 4.10f) return 90;
-  else if (v >= 3.98f) return 80;
-  else if (v >= 3.85f) return 70;
-  else if (v >= 3.80f) return 60;
-  else if (v >= 3.75f) return 50;
-  else if (v >= 3.70f) return 40;
-  else if (v >= 3.63f) return 30;
-  else if (v >= 3.55f) return 20;
-  else if (v >= 3.45f) return 10;
-  else                 return 0;
-}
-
-// ==============================
-// BASELINE RECALIBRATION (Δg baseline)
-// ==============================
-void recalibrateBaseline() {
-  if (!imuOK) return;
-  float sum = 0.0f;
-  int   cnt = 0;
-  for (int i=0;i<50;i++) {
-    sensors_event_t accel, gyro, temp;
-    if (lsm6.getEvent(&accel, &gyro, &temp)) {
-      float gx = accel.acceleration.x / MS2_PER_G;
-      float gy = accel.acceleration.y / MS2_PER_G;
-      float gz = accel.acceleration.z / MS2_PER_G;
-      sum += mag3(gx, gy, gz);
-      cnt++;
+bool enterSleep(const char* reason,bool force,uint32_t now);
+void serviceSerial(uint32_t now){
+ unsigned consumed=0;while(Serial.available()&&consumed++<64){char ch=char(Serial.read());
+  if(ch=='\r'||ch=='\n'){
+   serialCommand[serialLength]=0;
+   if(serialOverflow)Serial.println("SENSOR error: command too long");
+   else if(!std::strcmp(serialCommand,"status"))Serial.printf("SENSOR status radio=%u registered=%u attempts=%u node=%u control_rx=%lu control_tx=%lu state=%s imu=%u board=%s wake=%s sleeps=%lu short_wakes=%lu last_sleep=%s button=%u vbat=%.2f\n",radioReady,registration.confirmed(),registration.attempts(),registration.node(),(unsigned long)controlRx,(unsigned long)controlTx,bite::stateName(sensor.state()),sensor.healthy(),board::name,wakeName,(unsigned long)rtcSleeps,(unsigned long)rtcShortWakes,rtcLastSleep,digitalRead(board::button)==LOW,vbat);
+   else if(!std::strcmp(serialCommand,"register")){
+    if(sensor.desiredArmed())Serial.println("SENSOR error: disarm before register");
+    else if(!radioReady)Serial.println("SENSOR error: radio disabled");
+    else {sensorBoot=esp_random();if(!sensorBoot)sensorBoot=1;registration.begin(peerMac,sensorBoot);Serial.println("SENSOR diagnostic registration requested; no bite event");}
+   }else if(!std::strncmp(serialCommand,"peer ",5)){
+    uint8_t candidate[6];
+    if(sensor.desiredArmed())Serial.println("SENSOR error: disarm before peer setup");
+    else if(!storageOK||!bite::parseMac(serialCommand+5,candidate))Serial.println("SENSOR error: invalid peer or storage unavailable");
+    else {
+     db.set(kk::hubMac,String(serialCommand+5));db.set(kk::espNowEn,true);
+     if(flushSettings()){hubAddress=serialCommand+5;radioEn=true;draftMac=hubAddress;draftRadio=true;reconcileRadio();Serial.println("SENSOR peer saved; radio enabled");}
+     else {db.set(kk::hubMac,hubAddress);db.set(kk::espNowEn,radioEn);Serial.println("SENSOR error: peer save failed; live configuration unchanged");}
     }
-    delay(10);
-  }
-  if (cnt > 0) {
-    baselineMagG = sum / (float)cnt;
-    Serial.print("Baseline recalibrated: ");
-    Serial.println(baselineMagG, 4);
-  }
+   }else if(!std::strcmp(serialCommand,"sleep")){
+    if(sensor.desiredArmed())Serial.println("SENSOR error: disarm before sleep");
+    else if(!enterSleep("serial",false,now))Serial.printf("SENSOR sleep refused: %s\n",sleepNotice.c_str());
+   }else if(serialLength)Serial.println("SENSOR commands: status, register, sleep, peer AA:BB:CC:DD:EE:FF (disarmed only)");
+   // same timestamp as the idle check in loop(): a later millis() would wrap elapsed()
+   if(serialLength)disarmedClock.enter(now);
+   serialLength=0;serialOverflow=false;
+  }else if(serialLength+1<sizeof(serialCommand))serialCommand[serialLength++]=ch;else serialOverflow=true;
+ }
 }
-
-// ==============================
-// SOFT-LATCH POWER CONTROL HELPERS
-// ==============================
-inline void holdPower()    { digitalWrite(PIN_PWR_CTRL, HIGH); }
-inline void releasePower() { digitalWrite(PIN_PWR_CTRL, LOW);  }
-
-void requestPowerOff() {
-  Serial.println("Power off requested, shutting down...");
-  db.update();
-  delay(100);
-  releasePower();
-  while (true) delay(100);
+void persistConfig(){
+    mode=mode==1?1:0;language=language==1?1:0;draft.legacyMode=mode==1;
+    if(!sensor.configure(draft)){draft=sensor.config();mode=draft.legacyMode;notice=tr("Invalid setting rejected","Неверная настройка отклонена");return;}
+    pulseMs=constrain(pulseMs,40,1000);volume=constrain(volume,0,100);greenLevel=constrain(greenLevel,0,100);redLevel=constrain(redLevel,0,100);
+    db.set("benchSchema",1);db.set("dynamicThresholdG",draft.thresholdG);db.set("noiseMultiplier",draft.noiseMultiplier);
+    db.set("detectorMode",int(mode));db.set(kk::deltaG,draft.legacyThresholdG);
+    db.set(kk::shortPulse,int(pulseMs));db.set(kk::pulsePeriod,int(draft.repeatMs));db.set(kk::contThresh,int(draft.continuousMs));
+    db.set("autoDisarmEn",draft.suppression);db.set("autoUpDeg",draft.upDeg);db.set("autoTiltDeg",draft.tiltDeg);db.set("autoHoldMs",int(draft.suppressHoldMs));
+    db.set(kk::buzVol,int(volume));db.set(kk::ledGreenLvl,int(greenLevel));db.set(kk::ledRedLvl,int(redLevel));db.set(kk::langIdx,int(language));
+    notice=flushSettings()?tr("Saved","Сохранено"):tr("Save failed: settings are RAM only","Ошибка записи: настройки только в RAM");
 }
-
-bool readPwrButtonDebounced() {
-  uint32_t now = millis();
-  bool raw = digitalRead(PIN_BTN_IN);
-
-  if (raw != pwrBtnStableState) {
-    if (now - pwrBtnLastChangeMs >= PWR_DEBOUNCE_MS) {
-      pwrBtnPrevStable   = pwrBtnStableState;
-      pwrBtnStableState  = raw;
-      pwrBtnLastChangeMs = now;
-    }
-  } else {
-    pwrBtnLastChangeMs = now;
-  }
-  return pwrBtnStableState;
+void loadConfig(){
+    db.init(kk::name,sensorName);db.init(kk::apPass,apPassword);db.init(kk::hubMac,hubAddress);db.init(kk::espNowEn,false);
+    db.init(kk::deltaG,.15f);db.init(kk::shortPulse,120);db.init(kk::pulsePeriod,300);db.init(kk::contThresh,250);
+    db.init(kk::buzVol,100);db.init(kk::ledGreenLvl,100);db.init(kk::ledRedLvl,100);db.init(kk::langIdx,0);
+    db.init("calNoiseG",0.f);sensor.restoreNoise(db.get("calNoiseG").toFloat());
+    db.init("dynamicThresholdG",.02f);db.init("noiseMultiplier",4.f);db.init("detectorMode",0);
+    db.init("autoDisarmEn",true);db.init("autoUpDeg",25.f);db.init("autoTiltDeg",35.f);db.init("autoHoldMs",120);
+    // Do not read a saved arm intent after boot: calibration and explicit ARM are required.
+    sensorName=db.get(kk::name).toString();apPassword=db.get(kk::apPass).toString();hubAddress=db.get(kk::hubMac).toString();radioEn=db.get(kk::espNowEn).toBool();
+    if(!bite::validNetwork(sensorName.c_str(),apPassword.c_str())){sensorName="BiteSensor";apPassword="";notice="Invalid saved AP settings; using recovery AP";}
+    draft.thresholdG=db.get("dynamicThresholdG").toFloat();draft.legacyThresholdG=db.get(kk::deltaG).toFloat();draft.noiseMultiplier=db.get("noiseMultiplier").toFloat();
+    mode=db.get("detectorMode").toInt()==1?1:0;draft.legacyMode=mode==1;
+    draft.repeatMs=db.get(kk::pulsePeriod).toInt();draft.continuousMs=db.get(kk::contThresh).toInt();
+    draft.suppression=db.get("autoDisarmEn").toBool();draft.upDeg=db.get("autoUpDeg").toFloat();draft.tiltDeg=db.get("autoTiltDeg").toFloat();draft.suppressHoldMs=db.get("autoHoldMs").toInt();
+    if(!sensor.configure(draft)){draft=bite::Config{};sensor.configure(draft);mode=0;notice="Invalid saved detector settings; defaults in RAM";}
+    pulseMs=constrain(db.get(kk::shortPulse).toInt(),40,1000);volume=constrain(db.get(kk::buzVol).toInt(),0,100);
+    greenLevel=constrain(db.get(kk::ledGreenLvl).toInt(),0,100);redLevel=constrain(db.get(kk::ledRedLvl).toInt(),0,100);language=db.get(kk::langIdx).toInt()==1?1:0;
+    saveNonce=db.get("benchSave").toInt();draftName=sensorName;draftPass=apPassword;draftMac=hubAddress;draftRadio=radioEn;
 }
-
-void handlePowerButton() {
-  uint32_t now = millis();
-  bool level  = readPwrButtonDebounced();
-  bool pressed = (level == PWRBTN_ACTIVE_LEVEL);
-
-  if (pwrIgnoreFirstPress) {
-    if (!pressed) {
-      pwrIgnoreFirstPress = false;
-      Serial.println("Power button first release detected, power-off detection armed.");
-    }
-    return;
-  }
-
-  if (pressed) {
-    if (pwrBtnPrevStable != PWRBTN_ACTIVE_LEVEL) {
-      pwrBtnPressStartMs = now;
-    } else if (now - pwrBtnPressStartMs >= PWR_LONG_PRESS_MS) {
-      Serial.println("Power button long press -> power off");
-      requestPowerOff();
-    }
-  }
-
-  pwrBtnPrevStable = level;
-}
-
-// ==============================
-// AUTO-DISARM: functions
-// ==============================
-static void resetAutoDisarm() {
-  oriBaseValid = false;
-  baselineStableSince = 0;
-  moveOverSince = 0;
-}
-
-static void autoDisarmCaptureBaseline(uint32_t now, const Vec3& gNow, float dDelta) {
-  if (!cfg_autoDisarmEn || !armed) return;
-  if (oriBaseValid) return;
-  if (armWarmup) { baselineStableSince = 0; return; }
-
-  bool stable = accelMagOk(gNow) && (dDelta < (cfg_deltaG * BASELINE_DELTA_K));
-
-  if (!stable) {
-    baselineStableSince = 0;
-    return;
-  }
-
-  if (baselineStableSince == 0) baselineStableSince = now;
-
-  if (now - baselineStableSince >= BASELINE_STABLE_MS) {
-    gravityToPitchRoll(gNow, basePitchDeg, baseRollDeg);
-    oriBaseValid = true;
-    moveOverSince = 0;
-    Serial.printf("AUTO-DISARM: baseline captured pitch=%.1f roll=%.1f\n", basePitchDeg, baseRollDeg);
-  }
-}
-
-static bool checkAutoDisarmMove(uint32_t now, const Vec3& gNow) {
-  if (!cfg_autoDisarmEn || !armed) return false;
-  if (!oriBaseValid) return false;
-  if (armWarmup) return false;
-
-  if (now - armAtMs < AUTO_DISARM_MIN_ARM_MS) return false;
-
-  if (!accelMagOk(gNow)) {
-    moveOverSince = 0;
-    return false;
-  }
-
-  float upTh, tiltTh;
-  uint16_t holdMs;
-
-  if (cfg_autoDetect) {
-    upTh   = FIX_UP_DEG;
-    tiltTh = FIX_TILT_DEG;
-    holdMs = FIX_HOLD_MS;
-  } else {
-    upTh   = clampf(cfg_autoUpDeg,   0.0f, 90.0f);
-    tiltTh = clampf(cfg_autoTiltDeg, 0.0f, 90.0f);
-    holdMs = clamp16(cfg_autoHoldMs, 50, 2000);
-    if (upTh <= 0.0f && tiltTh <= 0.0f) return false;
-  }
-
-  float pitchDeg, rollDeg;
-  gravityToPitchRoll(gNow, pitchDeg, rollDeg);
-
-  float dPitch = fabsf(pitchDeg - basePitchDeg);
-  float dRoll  = fabsf(rollDeg  - baseRollDeg);
-
-  bool overUp   = (upTh   > 0.0f) && (dPitch >= upTh);
-  bool overTilt = (tiltTh > 0.0f) && (dRoll  >= tiltTh);
-
-  if (overUp || overTilt) {
-    if (moveOverSince == 0) moveOverSince = now;
-    if (now - moveOverSince >= holdMs) return true;
-  } else {
-    moveOverSince = 0;
-  }
-
-  return false;
-}
-
-// ==============================
-// ARM/DISARM + SLEEP
-// ==============================
-void suspendUntilLongPressToArm(){
-  setRedLED(false);
-  setGreenLED(false);
-  pinMode(BUTTON, INPUT_PULLUP);
-
-  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-
-#if CONFIG_IDF_TARGET_ESP32C3
-  uint64_t mask = 1ULL << (uint8_t)BUTTON;
-  esp_deep_sleep_enable_gpio_wakeup(mask, ESP_GPIO_WAKEUP_GPIO_LOW);
-#elif CONFIG_IDF_TARGET_ESP32C6
-  uint64_t mask = 1ULL << (uint8_t)BUTTON;
-  esp_sleep_enable_ext1_wakeup(mask, ESP_EXT1_WAKEUP_ANY_LOW);
-#else
-  esp_sleep_enable_ext0_wakeup((gpio_num_t)BUTTON, 0);
-#endif
-
-  esp_deep_sleep_start();
-}
-
-void setArmed(bool v,bool deepSleep){
-  armed=v; cfg_armedSw=v; db.set(kk::armedSw,v); updateGreenLED();
-
-  if(v){
-    longBeep();
-
-    stopPulse();
-    inMotion = false;
-    consecutiveTriggers = 0;
-
-    wifiArmStart = millis();
-    wifiApActiveAfterArm = true;
-
-    if (espNowEnabled && hubMacValid) espNowBegin();
-
-    resetAutoDisarm();
-
-    armAtMs = millis();
-    armWarmup = true;
-    warmupCnt = 0;
-    warmupSumMag = 0.0f;
-    gravInited = false;
-
-    stopPulse();
-    inMotion = false;
-    consecutiveTriggers = 0;
-
-  } else {
-    recalibrateBaseline();
-
-    espNowEnd();
-
-    stopPulse();
-    inMotion = false;
-    consecutiveTriggers = 0;
-
-    armWarmup = false;
-
-    shortBeep(); delay(80); shortBeep();
-    wifiEnterConfigMode();
-
-    if (deepSleep) suspendUntilLongPressToArm();
-  }
-}
-
-// ==============================
-// SETTINGS UI
-// ==============================
-bool saveReboot_f = false;
-bool testAlarm_f  = false;
-
-// UI-only IDs (must be size_t)
-static const size_t UI_AUTO_DISARM_EN   = 1300;
-static const size_t UI_AUTO_DETECT      = 1301;
-static const size_t UI_AUTO_UP          = 1302;
-static const size_t UI_AUTO_TILT        = 1303;
-static const size_t UI_AUTO_HOLD        = 1304;
-static const size_t UI_AUTO_INFO        = 1305;
-
-// UI holders (Status group cleaned)
-#define H_stateLbl    H(stateLbl)
-#define H_accelLbl    H(accelLbl)
-#define H_battLbl     H(battLbl)
-#define H_deltaLbl    H(deltaLbl)
-#define H_alertsLbl   H(alertsLbl)
-#define H_uptimeLbl   H(uptimeLbl)
-#define H_langHintLbl H(langHintLbl)
 
 void build(sets::Builder& b){
-  using namespace sets;
-
-  // ===== MENU PAGE SELECTOR (always on top) =====
-  {
-    Group g(b, L().grpMenu);
-    b.Select(UI_PAGE, L().lblMenu, L().menuItems, AnyPtr(&ui_page));
-  }
-
-  // ===== PAGE 0: STATUS =====
-  if (ui_page == 0) {
-    // Put test button on Status page (more logical)
-    {
-      Group g(b, L().grpStatus);
-
-      if (b.Button(kk::testAlarm, L().lblTestAlarm)) testAlarm_f = true;
-
-      b.Label(H_stateLbl,  L().lblState);
-      b.Label(H_accelLbl,  L().lblAccel);
-      b.Label(H_battLbl,   L().lblBattery);
-      b.Label(H_deltaLbl,  L().lblDeltaG);
-      b.Label(H_alertsLbl, L().lblAlerts);
-      b.Label(H_uptimeLbl, L().lblUptime);
-    }
-  }
-
-  // ===== PAGE 1: SENSOR =====
-  if (ui_page == 1) {
-    {
-      Group g(b, L().grpSensor);
-
-      b.Slider(kk::deltaG,      L().lblSensitivity, 0.02f, 1.0f, 0.01f, "",     AnyPtr(&cfg_deltaG));
-      b.Slider(kk::shortPulse,  L().lblShortPulse,  40.0f, 1000.0f, 10.0f, "ms", AnyPtr(&cfg_shortPulseMs));
-      b.Slider(kk::pulsePeriod, L().lblPulsePeriod, 100.0f, 2000.0f, 10.0f, "ms", AnyPtr(&cfg_pulsePeriod));
-      b.Slider(kk::contThresh,  L().lblContThresh,  50.0f, 2000.0f, 10.0f, "ms", AnyPtr(&cfg_contThresh));
-
-      b.Switch(kk::armedSw, L().lblArmedSwitch);
-
-      const char* lblAuto = cfg_langRu ? "Автоснятие сигнализации" : "Auto-disarm";
-      b.Switch(UI_AUTO_DISARM_EN, lblAuto, &cfg_autoDisarmEn);
-
-      if (cfg_autoDisarmEn) {
-        const char* lblAD = cfg_langRu ? "Авто-детект (фикс. параметры)" : "Auto Detect (fixed params)";
-        b.Switch(UI_AUTO_DETECT, lblAD, &cfg_autoDetect);
-
-        if (cfg_autoDetect) {
-          String info = String("Fixed: UP=") + String((int)FIX_UP_DEG) +
-                        "°, TILT=" + String((int)FIX_TILT_DEG) +
-                        "°, HOLD=" + String((int)FIX_HOLD_MS) + "ms";
-          b.Label(UI_AUTO_INFO, info);
-        } else {
-          const char* lblUp   = cfg_langRu ? "UP (градусы, 0=выкл.)"   : "UP (deg, 0=OFF)";
-          const char* lblTilt = cfg_langRu ? "TILT (градусы, 0=выкл.)" : "TILT (deg, 0=OFF)";
-          const char* lblHold = cfg_langRu ? "HOLD (мс)"               : "HOLD (ms)";
-
-          b.Slider(UI_AUTO_UP,   lblUp,   0.0f, 90.0f, 1.0f, "deg", AnyPtr(&cfg_autoUpDeg));
-          b.Slider(UI_AUTO_TILT, lblTilt, 0.0f, 90.0f, 1.0f, "deg", AnyPtr(&cfg_autoTiltDeg));
-          b.Slider(UI_AUTO_HOLD, lblHold, 50.0f, 2000.0f, 10.0f, "ms", AnyPtr(&cfg_autoHoldMs));
+    using namespace sets;
+    if(page>2)page=0;
+    b.Custom("BenchLayout",2199);
+    {Group g(b,tr("Menu","Меню"));if(b.Select(ui::menu,tr("Page","Страница"),tr("Status\nSensor\nSettings","Статус\nДатчик\nНастройки"),AnyPtr(&page)))b.reload();}
+    if(page==0){
+        {Group g(b,tr("Status","Статус"));
+            b.Label(ui::state,tr("State","Состояние"));
+            b.Label(ui::calInfo,tr("Calibration","Калибровка"));
+            b.Label(ui::battery,tr("Battery (approx.)","Батарея (≈)"));
+            b.Label(ui::radioInfo,"ESP-NOW");
         }
-      }
+        {Group g(b,tr("Controls","Управление"));
+            if(b.Switch(ui::arm,tr("Armed","Охрана"),&armUi))setArmed(armUi,millis());
+            if(b.Button(ui::cal,tr("Calibrate · keep still 2 s","Калибровка · не трогать 2 с")))calRequest=true;
+            if(b.Button(ui::test,tr("Test sound / LED","Тест звука / LED")))testRequest=true;
+            if(b.Switch(ui::capture,"Serial CSV",&csv)){csvBuffer.clear();if(csv){const char* header="ms,ax_g,ay_g,az_g,dynamic_g,legacy_g,noise_g,threshold_g,state,event,mode\n";csvBuffer.append(header,strlen(header));}}
+        }
+        if(b.Switch(ui::details,tr("Details","Подробности"),&showDetails))b.reload();
+        if(showDetails){Group g(b,tr("Technical details","Технические данные"));
+            b.Label(ui::health,tr("IMU / PWM / storage","IMU / PWM / память"));
+            b.Label(ui::xyz,"XYZ, g");b.Label(ui::signals,tr("Dynamic / legacy, g","Dynamic / Legacy, g"));
+            b.Label(ui::noiseInfo,tr("Noise / threshold, g","Шум / порог, g"));
+            b.Label(ui::batteryRaw,tr("Battery ADC","Батарея: АЦП"));
+            b.Label(ui::stats,tr("Events / pulses / suppressed ms","События / импульсы / подавление, мс"));
+            b.Label(ui::timing,tr("Hz / gaps / I2C errors","Гц / пропуски / ошибки I2C"));
+            b.Label(ui::sleep,tr("Sleep","Сон"));b.Label(ui::radioDetails,tr("ESP-NOW counters","ESP-NOW: счётчики"));
+            b.Label(ui::message,tr("Last message","Последнее сообщение"));
+            b.Paragraph("",tr("Serial CSV: fresh samples, up to 104 Hz. Test sound does not send radio.","Serial CSV: новые выборки, до 104 Гц. Тест звука не отправляет радио."));
+        }
     }
-  }
-
-  // ===== PAGE 2: NETWORK (General + ESP-NOW + Wi-Fi) =====
-  if (ui_page == 2) {
-    // --- General group ---
-    {
-      Group g(b, L().grpGeneral);
-
-      b.Select(kk::langIdx, L().lblLanguage, "English\nРусский", AnyPtr(&cfg_langIdx));
-      b.Label(H_langHintLbl, L().langHint);
-
-      const char* lblBuz = cfg_langRu ? "Громкость зуммера" : "Buzzer volume";
-      const char* lblLR  = cfg_langRu ? "Яркость красного светодиода" : "Red LED brightness";
-      const char* lblLG  = cfg_langRu ? "Яркость зелёного светодиода" : "Green LED brightness";
-
-      b.Slider(kk::buzVol,      lblBuz, 0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_buzVolPct));
-      b.Slider(kk::ledRedLvl,   lblLR,  0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_ledRedPct));
-      b.Slider(kk::ledGreenLvl, lblLG,  0.0f, 100.0f, 1.0f, "%", AnyPtr(&cfg_ledGreenPct));
+    if(page==1){Group g(b,tr("Detection","Детекция"));
+        b.Paragraph("",tr("Lower threshold = more sensitive. Noise protection may raise the effective threshold.","Меньше порог — выше чувствительность. Защита от шума может повысить рабочий порог."));
+        if(b.Select(ui::algorithm,tr("Algorithm","Алгоритм"),"Dynamic XYZ\nLegacy magnitude",AnyPtr(&mode))){saveConfig=true;b.reload();}
+        if(mode==0){if(b.Slider(ui::threshold,tr("Threshold, g","Порог, g"),.002f,.5f,.001f,"g",AnyPtr(&draft.thresholdG)))saveConfig=true;
+            if(b.Slider(ui::noise,tr("Noise multiplier","Защита от шума, ×"),1,10,.5f,"",AnyPtr(&draft.noiseMultiplier)))saveConfig=true;
+        }else if(b.Slider(ui::legacy,tr("Legacy threshold","Порог Legacy"),.02f,1,.01f,"g",AnyPtr(&draft.legacyThresholdG)))saveConfig=true;
+        if(b.Slider(ui::pulse,tr("Alarm pulse","Импульс"),40,1000,10,"ms",AnyPtr(&pulseMs)))saveConfig=true;
+        if(b.Slider(ui::period,tr("Repeat period","Повтор сигнала"),100,2000,10,"ms",AnyPtr(&draft.repeatMs)))saveConfig=true;
+        if(b.Slider(ui::continuous,tr("Continuous delay","Непрерывность"),50,2000,10,"ms",AnyPtr(&draft.continuousMs)))saveConfig=true;
+        if(b.Switch(ui::suppress,tr("Motion suppression","Подавлять перемещение"),&draft.suppression)){saveConfig=true;b.reload();}
+        if(draft.suppression){
+            b.Paragraph("",tr("Suppress alarms, then resume when still. Angle 0 = disabled.","Подавлять тревоги и возобновлять после стабилизации. Угол 0 — отключён."));
+            if(b.Slider(ui::up,tr("Pitch limit","Наклон UP"),0,90,1,"deg",AnyPtr(&draft.upDeg)))saveConfig=true;
+            if(b.Slider(ui::tilt,tr("Roll limit","Крен TILT"),0,90,1,"deg",AnyPtr(&draft.tiltDeg)))saveConfig=true;
+            if(b.Slider(ui::hold,tr("Motion hold","Удержание"),50,2000,10,"ms",AnyPtr(&draft.suppressHoldMs)))saveConfig=true;
+        }
     }
-
-    // --- ESP-NOW group ---
-    {
-      Group g(b, L().grpEspNow);
-      b.Switch(kk::espNowEn, L().lblEspNowEnable);
-      b.Input(kk::hubMac, L().lblHubMac);
+    if(page==2){Group g(b,tr("Settings","Настройки"));
+        if(b.Select(ui::lang,"Language / Язык","English\nРусский",AnyPtr(&language))){saveConfig=true;b.reload();}
+        if(b.Slider(ui::vol,tr("Buzzer volume","Громкость зуммера"),0,100,1,"%",AnyPtr(&volume)))saveConfig=true;
+        if(b.Slider(ui::green,tr("Green LED","Зелёный LED"),0,100,1,"%",AnyPtr(&greenLevel)))saveConfig=true;
+        if(b.Slider(ui::red,tr("Red LED","Красный LED"),0,100,1,"%",AnyPtr(&redLevel)))saveConfig=true;
+        b.Input(ui::name,tr("AP name","Имя Wi-Fi"),AnyPtr(&draftName));
+        b.Pass(ui::pass,tr("AP password","Пароль Wi-Fi"),AnyPtr(&draftPass));
+        b.Switch(ui::radio,tr("ESP-NOW enabled","ESP-NOW включён"),&draftRadio);b.Input(ui::mac,tr("Hub unicast MAC","Unicast MAC хаба"),AnyPtr(&draftMac));
+        if(b.Button(ui::save,tr("Save network and restart","Сохранить сеть и перезапустить")))networkRequest=true;
     }
-
-    // --- Wi-Fi group ---
-    {
-      Group g(b, L().grpWiFi);
-      b.Input(kk::name,  L().lblName);
-      b.Pass (kk::apPass,L().lblApPass);
-      if (b.Button(kk::saveRB, L().lblSaveRestart)) saveReboot_f = true;
-    }
-  }
 }
-
 void update(sets::Updater& u){
-  // Persist core sliders
-  db.set(kk::deltaG,      cfg_deltaG);
-  db.set(kk::shortPulse,  (int)cfg_shortPulseMs);
-  db.set(kk::pulsePeriod, (int)cfg_pulsePeriod);
-  db.set(kk::contThresh,  (int)cfg_contThresh);
-  db.set(kk::buzVol,      (int)cfg_buzVolPct);
-  db.set(kk::ledRedLvl,   (int)cfg_ledRedPct);
-  db.set(kk::ledGreenLvl, (int)cfg_ledGreenPct);
+    const auto& t=sensor.telemetry();
+    u.update(ui::state,benchStateText(sensor.state(),language));
+    u.update(ui::arm,sensor.desiredArmed());
+    u.update(ui::health,String(sensor.healthy()?"IMU OK":"IMU FAULT")+" / PWM "+(pwmOK?"OK":"ERROR")+" / FS "+(storageOK?"OK":"ERROR"));
+    u.updateColor(ui::health,sensor.healthy()&&pwmOK?sets::Colors::Green:sets::Colors::Red);
+    u.update(ui::xyz,String(t.accel.x,4)+", "+String(t.accel.y,4)+", "+String(t.accel.z,4));
+    u.update(ui::signals,String(t.signal.dynamic,4)+" / "+String(t.signal.legacy,4));
+    u.update(ui::noiseInfo,String(t.noiseG,4)+" / "+String(t.effectiveG,4)+(t.effectiveG>sensor.config().thresholdG&&!mode?tr(" (noise raised threshold)"," (порог повышен шумом)"):""));
+    u.update(ui::calInfo,benchCalibrationText(sensor.calibration(),t.calibrationProgress,language));
+    u.update(ui::battery,vbat>=2.5f&&vbat<=4.5f?String(vbat,2)+" V / ≈"+String(batteryPct)+"%":String(tr("No valid reading","Нет достоверного замера")));
+    u.update(ui::batteryRaw,String(vbat,2)+" V / ≈"+String(batteryPct)+"%");
+    u.update(ui::stats,String(t.events)+" / "+String(pulseCount)+" / "+String(t.suppressedMs));
+    u.update(ui::timing,String(sampleRate,1)+" Hz / "+String(t.gaps)+" / "+String(readErrors)+"; CSV dropped="+String(csvDrops));
+    u.update(ui::sleep,sleepNotice);
+    u.update(ui::radioInfo,!radioEn?tr("Off","Выключен"):radioReady?(registration.confirmed()?tr("Registered at startup","Регистрация при старте подтверждена"):tr("Ready; hub unconfirmed","Готов; хаб не подтверждён")):tr("Error — see details","Ошибка — см. подробности"));
+    u.update(ui::radioDetails,radioNotice+" TX="+String(txSuccess.load(std::memory_order_relaxed))+" fail="+String(txFail.load(std::memory_order_relaxed)+sendErrors));u.update(ui::message,notice);
+}
 
-  // Save menu page (Option A)
-  if (ui_page > 2) ui_page = 0;
-  db.set(DBK_UI_PAGE, (int)ui_page);
+bool armWake(){
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);esp_err_t result=ESP_ERR_INVALID_ARG;
+    gpio_num_t pin=gpio_num_t(board::button);
+#if CONFIG_IDF_TARGET_ESP32C3
+    // Low-level GPIO wake; the sleep driver enables the internal pull-up of a wake pin.
+    gpio_pullup_en(pin);gpio_pulldown_dis(pin);
+    result=esp_deep_sleep_enable_gpio_wakeup(1ULL<<board::button,ESP_GPIO_WAKEUP_GPIO_LOW);
+#elif CONFIG_IDF_TARGET_ESP32C6
+    result=esp_sleep_enable_ext1_wakeup(1ULL<<board::button,ESP_EXT1_WAKEUP_ANY_LOW);
+#else
+    result=esp_sleep_enable_ext0_wakeup(pin,0);
+#endif
+#if SOC_RTCIO_INPUT_OUTPUT_SUPPORTED && !CONFIG_IDF_TARGET_ESP32C3
+    // The bench has no external pull-up; v4 also has R3 10k.
+    if(result==ESP_OK){rtc_gpio_pullup_en(pin);rtc_gpio_pulldown_dis(pin);}
+#endif
+    return result==ESP_OK;
+}
+// force: button / low battery always sleep; idle and serial sleep wait for a successful settings flush.
+bool enterSleep(const char* reason,bool force,uint32_t now){
+    sleepAttempted=true;
+    if(!board::wakeAllowed()){sleepNotice=tr("Deep sleep blocked: button pin cannot wake this board","Глубокий сон запрещён: вывод кнопки не будит эту плату");return false;}
+    if(!button.released()){sleepAttempted=false;sleepNotice=tr("Sleep postponed: button is pressed","Сон отложен: кнопка нажата");return false;}
+    if(sensor.desiredArmed()){sensor.setArmed(false,now);armUi=false;db.set(kk::armedSw,false);}
+    bool saved=flushSettings();
+    if(!saved&&!force){sleepNotice=tr("Sleep postponed: settings save failed","Сон отложен: ошибка записи настроек");return false;}
+    if(!armWake()){sleepNotice="Sleep blocked: wake API rejected pin";return false;}
+    stopOutputs();applyOutputs(now);
+    if(pwmOK){ledcWriteChannel(0,0);ledcWriteChannel(1,0);ledcWriteChannel(2,0);}
+    imu.powerDown();
+    radioEnd();WiFi.softAPdisconnect(true);WiFi.mode(WIFI_OFF);
+    std::strncpy(rtcLastSleep,reason,sizeof(rtcLastSleep)-1);rtcLastSleep[sizeof(rtcLastSleep)-1]=0;++rtcSleeps;
+    Serial.printf("SENSOR sleep reason=%s saved=%u; hold the button 1 s to wake\n",reason,saved);Serial.flush();delay(30);
+    esp_deep_sleep_start();
+    return false;
+}
 
-  // Auto-disarm settings
-  db.set(DBK_AUTO_DISARM_EN, (int)(cfg_autoDisarmEn ? 1 : 0));
-  db.set(DBK_AUTO_DETECT,    (int)(cfg_autoDetect ? 1 : 0));
-
-  cfg_autoUpDeg   = clampf(cfg_autoUpDeg,   0.0f, 90.0f);
-  cfg_autoTiltDeg = clampf(cfg_autoTiltDeg, 0.0f, 90.0f);
-  cfg_autoHoldMs  = clamp16(cfg_autoHoldMs, 50, 2000);
-
-  db.set(DBK_AUTO_UP_DEG,   cfg_autoUpDeg);
-  db.set(DBK_AUTO_TILT_DEG, cfg_autoTiltDeg);
-  db.set(DBK_AUTO_HOLD_MS,  (int)cfg_autoHoldMs);
-
-  if (!cfg_autoDisarmEn) resetAutoDisarm();
-
-  // ESP-NOW settings
-  if (auto e = db.get(kk::espNowEn))   cfg_espNowEn = e.toBool();
-  if (auto e = db.get(kk::hubMac))     cfg_hubMacStr = e.toString();
-
-  espNowEnabled = cfg_espNowEn;
-  hubMacValid   = false;
-  if (cfg_hubMacStr.length() > 0) {
-    hubMacValid = parseMac(cfg_hubMacStr, hubMacAddr);
-    if (!hubMacValid) u.alert(L().msgHubMacBad);
-  }
-
-  // Armed switch (web toggle)
-  if (auto e = db.get(kk::armedSw)) cfg_armedSw = e.toBool();
-
-  // Language index change detection
-  if (cfg_langIdx != g_prevLangIdx) {
-    g_prevLangIdx = cfg_langIdx;
-    cfg_langRu = (cfg_langIdx == 1);
-    db.set(kk::langIdx, cfg_langIdx);
-    u.notice(L().msgLangChanged);
-  } else {
-    cfg_langRu = (cfg_langIdx == 1);
-  }
-
-  // Name/SSID/pass
-  if (auto e = db.get(kk::name))   cfg_name   = e.toString();
-  if (auto e = db.get(kk::apPass)) cfg_apPass = e.toString();
-
-  // Sanitize
-  cfg_deltaG       = clampf(cfg_deltaG, 0.02f, 1.0f);
-  cfg_shortPulseMs = clamp16(cfg_shortPulseMs, 40, 1000);
-  cfg_pulsePeriod  = clamp16(cfg_pulsePeriod,  100, 2000);
-  cfg_contThresh   = clamp16(cfg_contThresh,   50, 2000);
-  cfg_buzVolPct    = clamp16(cfg_buzVolPct,    0, 100);
-  cfg_ledRedPct    = clamp16(cfg_ledRedPct,    0, 100);
-  cfg_ledGreenPct  = clamp16(cfg_ledGreenPct,  0, 100);
-
-  // Apply armed switch (no immediate deep sleep)
-  if (cfg_armedSw != armed) setArmed(cfg_armedSw, false);
-
-  // Save & restart for Wi-Fi creds / SSID
-  if (saveReboot_f) {
-    saveReboot_f = false;
-    String newName = db.get(kk::name).toString();
-    String newPass = db.get(kk::apPass).toString();
-    newName.trim();
-    if (newName.length() == 0 || newName.length() > 32) u.alert(L().msgNameBad);
-    else if (!newPass.isEmpty() && newPass.length() < 8) u.alert(L().msgPassBad);
-    else {
-      db.set(kk::name, newName);
-      db.set(kk::apPass, newPass);
-      db.update();
-      u.notice(L().msgSavedReboot);
-      ESP.restart();
+bool mountStorage(){
+    if(LittleFS.begin(false))return true;
+    // A fresh, fully erased partition contains no user data. Never auto-format a
+    // nonblank partition after a mount failure: it may contain recoverable data.
+    const esp_partition_t* part=esp_partition_find_first(ESP_PARTITION_TYPE_DATA,ESP_PARTITION_SUBTYPE_ANY,"spiffs");
+    if(!part)part=esp_partition_find_first(ESP_PARTITION_TYPE_DATA,ESP_PARTITION_SUBTYPE_ANY,"littlefs");
+    if(!part)return false;
+    uint8_t block[1024];
+    for(size_t offset=0;offset<part->size;offset+=sizeof(block)){
+        size_t count=std::min<size_t>(sizeof(block),part->size-offset);
+        if(esp_partition_read(part,offset,block,count)!=ESP_OK)return false;
+        for(size_t i=0;i<count;++i)if(block[i]!=0xff)return false;
     }
-  }
-
-  // Web "Calibrate baseline & test alarm" button (now located on Status page)
-  if (testAlarm_f) {
-    testAlarm_f = false;
-    recalibrateBaseline();
-    startTestPulse();
-  }
-
-  // ---- Status (CLEANED) ----
-  u.update(H_stateLbl, armed ? String(L().valArmed) : String(L().valDisarmed));
-
-  // Accelerometer: OK green / ERROR red
-  u.update(H_accelLbl, imuOK ? String(L().valAccelOK) : String(L().valAccelErr));
-  u.updateColor(H_accelLbl, imuOK ? sets::Colors::Green : sets::Colors::Red);
-
-  // Battery
-  {
-    String txt = String(g_batt_pct) + "% (" + String(g_vbat_V, 2) + " V)";
-    u.update(H_battLbl, txt);
-  }
-
-  // Δg
-  u.update(H_deltaLbl,  String(g_lastDelta, 3));
-
-  // Alerts
-  u.update(H_alertsLbl, (int)g_alerts);
-
-  // Uptime in minutes
-  u.update(H_uptimeLbl, (uint32_t)(millis() / 60000));
-
-  updateGreenLED();
+    return LittleFS.format()&&LittleFS.begin(false);
 }
 
-// ==============================
-// BUTTON HANDLER (SW1 – ARM/DISARM)
-// ==============================
-static void handleButton(){
-  btn.tick();
-  if (btn.hold()) {
-    if (armed) setArmed(false, false);
-    else       setArmed(true,  false);
-  }
-}
-
-// ==============================
-// SETUP
-// ==============================
 void setup(){
-  pinMode(PIN_PWR_CTRL, OUTPUT);
-  holdPower();
-
-  pinMode(PIN_BTN_IN, INPUT);
-
-  pinMode(LED_GREEN,OUTPUT);
-  pinMode(LED_RED,OUTPUT);
-  pinMode(BUZZER,OUTPUT);
-  pinMode(BUTTON, INPUT_PULLUP);
-  btn.setHoldTimeout(LONG_PRESS_MS);
-  pinMode(VBAT_PIN, INPUT);
-
-  Serial.begin(115200);
-  delay(100);
-  Serial.println();
-  Serial.println("Fishing Bite Sensor starting...");
-
-#ifdef ESP32
-  setCpuFrequencyMhz(80);
-#if ESP_IDF_VERSION_MAJOR >= 5
-  { esp_task_wdt_config_t wc = {.timeout_ms = 30000, .idle_core_mask = 0, .trigger_panic = true};
-    esp_task_wdt_reconfigure(&wc); }
-#else
-  esp_task_wdt_init(30, true);
-#endif
-  esp_task_wdt_add(NULL);       // watch the main loop task
-#endif
-
-  analogReadResolution(12);
-  pwmInit();
-
-#ifdef ESP32
-  LittleFS.begin(true);
-#else
-  LittleFS.begin();
-#endif
-  db.begin();
-
-  // Defaults (DB_KEYS)
-  db.init(kk::name,       cfg_name);
-  db.init(kk::deltaG,     cfg_deltaG);
-  db.init(kk::shortPulse, (int)cfg_shortPulseMs);
-  db.init(kk::pulsePeriod,(int)cfg_pulsePeriod);
-  db.init(kk::contThresh, (int)cfg_contThresh);
-  db.init(kk::armedSw,    false);
-  db.init(kk::langIdx,    cfg_langIdx);
-  db.init(kk::apPass,     cfg_apPass);
-  db.init(kk::buzVol,      (int)cfg_buzVolPct);
-  db.init(kk::ledRedLvl,   (int)cfg_ledRedPct);
-  db.init(kk::ledGreenLvl, (int)cfg_ledGreenPct);
-  db.init(kk::espNowEn,    false);
-  db.init(kk::hubMac,      cfg_hubMacStr);
-  db.init(kk::testAlarm,   0);
-
-  // Defaults (string keys)
-  db.init(DBK_AUTO_DISARM_EN, 1);
-  db.init(DBK_AUTO_DETECT,    1);
-  db.init(DBK_AUTO_UP_DEG,    cfg_autoUpDeg);
-  db.init(DBK_AUTO_TILT_DEG,  cfg_autoTiltDeg);
-  db.init(DBK_AUTO_HOLD_MS,   (int)cfg_autoHoldMs);
-
-  // Menu page default + load
-  db.init(DBK_UI_PAGE, 0);
-  ui_page = (uint8_t)db.get(DBK_UI_PAGE).toInt();
-  if (ui_page > 2) ui_page = 0;
-
-  // Load persisted (DB_KEYS)
-  cfg_name         = db.get(kk::name).toString();
-  cfg_deltaG       = db.get(kk::deltaG).toFloat();
-  cfg_shortPulseMs = db.get(kk::shortPulse).toInt();
-  cfg_pulsePeriod  = db.get(kk::pulsePeriod).toInt();
-  cfg_contThresh   = db.get(kk::contThresh).toInt();
-  cfg_armedSw      = db.get(kk::armedSw).toBool();
-  cfg_langIdx      = db.get(kk::langIdx).toInt();
-  cfg_langRu       = (cfg_langIdx == 1);
-  cfg_apPass       = db.get(kk::apPass).toString();
-  cfg_buzVolPct    = db.get(kk::buzVol).toInt();
-  cfg_ledRedPct    = db.get(kk::ledRedLvl).toInt();
-  cfg_ledGreenPct  = db.get(kk::ledGreenLvl).toInt();
-  cfg_espNowEn     = db.get(kk::espNowEn).toBool();
-  cfg_hubMacStr    = db.get(kk::hubMac).toString();
-
-  // Load persisted (auto-disarm)
-  cfg_autoDisarmEn = (db.get(DBK_AUTO_DISARM_EN).toInt() != 0);
-  cfg_autoDetect   = (db.get(DBK_AUTO_DETECT).toInt() != 0);
-  cfg_autoUpDeg    = clampf(db.get(DBK_AUTO_UP_DEG).toFloat(),   0.0f, 90.0f);
-  cfg_autoTiltDeg  = clampf(db.get(DBK_AUTO_TILT_DEG).toFloat(), 0.0f, 90.0f);
-  cfg_autoHoldMs   = clamp16((uint16_t)db.get(DBK_AUTO_HOLD_MS).toInt(), 50, 2000);
-
-  espNowEnabled = cfg_espNowEn;
-  hubMacValid = false;
-  if (cfg_hubMacStr.length() > 0) hubMacValid = parseMac(cfg_hubMacStr, hubMacAddr);
-
-  wifiEnterConfigMode();
-
-  sett.begin();
-  sett.onBuild(build);
-  sett.onUpdate(update);
-
-  if (I2C_SDA_PIN>=0 && I2C_SCL_PIN>=0) Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-  else Wire.begin();
-  Wire.setClock(100000);
-
-  if (!lsm6.begin_I2C(LSM6_ADDR)) {
-    Serial.println("LSM6DS3 not found");
-    imuOK = false;
-  } else {
-    imuOK = true;
-    Serial.print("LSM6DS3 found @0x");
-    Serial.println(LSM6_ADDR, HEX);
-    lsm6.setAccelRange(LSM6DS_ACCEL_RANGE_2_G);
-    lsm6.setAccelDataRate(LSM6DS_RATE_104_HZ);
-  }
-
-  recalibrateBaseline();
-  resetAutoDisarm();
-
-  // On fresh power-on: always DISARMED.
-  // On watchdog / crash / SW reset: restore last saved state so sensor resumes its job.
-  {
-    esp_reset_reason_t reason = esp_reset_reason();
-    bool restore = (reason != ESP_RST_POWERON && reason != ESP_RST_DEEPSLEEP);
-    setArmed(restore ? cfg_armedSw : false, false);
-    if (restore) Serial.printf("Reset reason %d – restoring armed=%d\n", reason, cfg_armedSw);
-  }
-  bootMs = millis();
-
-  g_vbat_V   = readVbat();
-  g_batt_pct = vbatToPercent(g_vbat_V);
-  lastVbatMs = millis();
-
-  uint32_t now = millis();
-  bool raw = digitalRead(PIN_BTN_IN);
-  pwrBtnStableState  = raw;
-  pwrBtnPrevStable   = raw;
-  pwrBtnLastChangeMs = now;
-  pwrIgnoreFirstPress = true;
+    pinMode(board::button,INPUT_PULLUP);
+    auto cause=esp_sleep_get_wakeup_cause();
+    bool buttonWake=cause==ESP_SLEEP_WAKEUP_GPIO||cause==ESP_SLEEP_WAKEUP_EXT0||cause==ESP_SLEEP_WAKEUP_EXT1;
+    wakeName=buttonWake?"button":cause==ESP_SLEEP_WAKEUP_UNDEFINED?"reset":"other";
+    if(buttonWake){
+        // Before radio/IMU start: a short touch goes straight back to sleep.
+        bite::WakeConfirm confirm;confirm.begin(millis());bite::WakeResult r;
+        while((r=confirm.update(digitalRead(board::button)==LOW,millis()))==bite::WakeResult::Waiting)delay(5);
+        if(r==bite::WakeResult::Rejected&&armWake()){++rtcShortWakes;++rtcSleeps;esp_deep_sleep_start();}
+    }
+    pinMode(board::battery,INPUT);
+    Serial.begin(115200);sensorBoot=esp_random();if(!sensorBoot)sensorBoot=1;setCpuFrequencyMhz(80);initOutputs();
+    analogReadResolution(12);analogSetPinAttenuation(board::battery,ADC_11db);
+    storageOK=mountStorage();if(storageOK)storageOK=db.begin();
+    if(!storageOK)notice="Storage error; RAM settings only (not formatting existing data)";
+    loadConfig();Wire.begin(board::sda,board::scl);Wire.setClock(400000);Wire.setTimeOut(20);
+    uint32_t now=millis();imuSession.begin(imu,sensor,now);now=millis();enterConfig(now);reconcileRadio();disarmedClock.enter(now);
+    sleepNotice=board::wakeAllowed()?tr("Deep sleep: hold button 3 s; wake: hold 1 s","Сон: удержать кнопку 3 с; пробуждение: удержать 1 с"):tr("Button pin cannot deep-wake this board: sleep disabled","Вывод кнопки не будит эту плату: сон отключён");
+    sett.setCustom(benchMobileJs,strlen_P(benchMobileJs));
+    sett.begin();sett.onBuild(build);sett.onUpdate(update);
+    updateBattery();lastBattery=lastRate=now;button.begin(digitalRead(board::button)==LOW,millis());
+    if(buttonWake)beep.start(millis(),150);
+    esp_task_wdt_config_t wc={.timeout_ms=30000,.idle_core_mask=0,.trigger_panic=true};
+    if(esp_task_wdt_reconfigure(&wc)==ESP_ERR_INVALID_STATE)esp_task_wdt_init(&wc);
+    esp_task_wdt_add(nullptr);
+    Serial.printf("Bite sensor %s: XIAO, checked LSM6DS3, dynamic/legacy, wake=%s, no field guarantee\n",board::name,wakeName);
 }
-
-// ==============================
-// LOOP
-// ==============================
 void loop(){
-  esp_task_wdt_reset();
-  sett.tick();
-  uint32_t now = millis();
-
-  handlePowerButton();
-  handleButton();
-  updateGreenLED();
-
-  // AP window after ARM
-  if (armed && wifiApActiveAfterArm && (now - wifiArmStart >= ARMED_AP_WINDOW_MS)) {
-    wifiAfterArmWindow();
-    wifiApActiveAfterArm = false;
-  }
-
-  // DISARMED: sleep after grace if no clients
-  if (!armed){
-    bool clientConnected = (WiFi.softAPgetStationNum()>0);
-    bool inGrace = (now - bootMs) < DISARMED_AP_GRACE_MS;
-    if (!clientConnected && !inGrace) suspendUntilLongPressToArm();
-  }
-
-  // Battery periodic update
-  if (now - lastVbatMs >= VBAT_PERIOD_MS) {
-    lastVbatMs = now;
-    g_vbat_V   = readVbat();
-    g_batt_pct = vbatToPercent(g_vbat_V);
-
-    if (armed && espNowEnabled && espNowInited && hubMacValid) {
-      if (!lowBattReported && g_batt_pct <= LOW_BATT_THRESHOLD_PCT) {
-        sendBitePacket(3);
-        lowBattReported = true;
-      } else if (lowBattReported && g_batt_pct > LOW_BATT_THRESHOLD_PCT + LOW_BATT_HYSTERESIS) {
-        lowBattReported = false;
-      }
+    esp_task_wdt_reset();sett.tick();uint32_t now=millis();
+    switch(button.update(digitalRead(board::button)==LOW,now)){
+        case bite::ButtonAction::ArmCue:beep.start(now,60);break;
+        case bite::ButtonAction::SleepCue:beep.start(now,400);break;
+        case bite::ButtonAction::ToggleArm:setArmed(!sensor.desiredArmed(),now);break;
+        case bite::ButtonAction::Sleep:enterSleep("button",true,now);break;
+        default:break;
     }
-  }
-
-  if (!armed) return;
-
-  // IMU sample timing
-  if (now - lastSample < SAMPLE_INTERVAL_MS) return;
-  lastSample = now;
-
-  if (!imuOK) return;
-
-  sensors_event_t accel, gyro, temp;
-  if (!lsm6.getEvent(&accel, &gyro, &temp)) return;
-
-  float gx = accel.acceleration.x / MS2_PER_G;
-  float gy = accel.acceleration.y / MS2_PER_G;
-  float gz = accel.acceleration.z / MS2_PER_G;
-
-  // init gravity filter
-  if (!gravInited) {
-    gravF = {gx, gy, gz};
-    gravInited = true;
-  } else {
-    gravF.x = MOVE_GRAV_ALPHA*gravF.x + (1.0f - MOVE_GRAV_ALPHA)*gx;
-    gravF.y = MOVE_GRAV_ALPHA*gravF.y + (1.0f - MOVE_GRAV_ALPHA)*gy;
-    gravF.z = MOVE_GRAV_ALPHA*gravF.z + (1.0f - MOVE_GRAV_ALPHA)*gz;
-  }
-
-  float mag = mag3(gx,gy,gz);
-  baselineMagG = baselineMagG*0.999f + mag*0.001f;
-
-  float d = fabsf(mag - baselineMagG);
-  g_lastDelta = d;
-
-  // ARM warmup block
-  if (armWarmup) {
-    warmupCnt++;
-    warmupSumMag += mag;
-
-    if ((now - armAtMs) >= ARM_SETTLE_MS) {
-      if (warmupCnt > 0) baselineMagG = warmupSumMag / (float)warmupCnt;
-
-      consecutiveTriggers = 0;
-      inMotion = false;
-      stopPulse();
-
-      armWarmup = false;
-
-      resetAutoDisarm();
-      Serial.println("ARM warmup finished");
+    serviceSerial(now);serviceRegistration(now);
+    if(saveConfig){saveConfig=false;persistConfig();}
+    if(networkRequest){networkRequest=false;uint8_t parsed[6];draftName.trim();
+        if(!bite::validNetwork(draftName.c_str(),draftPass.c_str())||(draftRadio&&!bite::parseMac(draftMac.c_str(),parsed))){notice=tr("Invalid AP credentials or hub MAC; nothing applied","Неверное имя/пароль AP или MAC; изменения не применены");}
+        else{db.set(kk::name,draftName);db.set(kk::apPass,draftPass);db.set(kk::hubMac,draftMac);db.set(kk::espNowEn,draftRadio);
+            if(flushSettings()){sensorName=draftName;apPassword=draftPass;hubAddress=draftMac;radioEn=draftRadio;reconcileRadio();stopOutputs();rebootAt=now;notice="Saved; restarting";}
+            else{db.set(kk::name,sensorName);db.set(kk::apPass,apPassword);db.set(kk::hubMac,hubAddress);db.set(kk::espNowEn,radioEn);notice="Network save failed; current network kept";}}
     }
-    return;
-  }
-
-  // Auto-disarm baseline capture
-  autoDisarmCaptureBaseline(now, gravF, d);
-
-  // Auto-disarm trigger
-  if (checkAutoDisarmMove(now, gravF)) {
-    Serial.println("AUTO-DISARM: rod moved -> disarm");
-    setArmed(false, false);
-    return;
-  }
-
-  // Bite detection (Δg)
-  if (d >= cfg_deltaG){ if (consecutiveTriggers<255) consecutiveTriggers++; }
-  else if (consecutiveTriggers>0) consecutiveTriggers--;
-
-  bool motionNow = (consecutiveTriggers >= TRIGGER_SAMPLES);
-  if (motionNow && !inMotion){
-    inMotion = true;
-    motionStartMs = now;
-    startPulse(now, 1);
-  } else if (!motionNow && inMotion){
-    inMotion = false;
-  }
-
-  // End short pulse
-  if (pulseOn && (int32_t)(now - pulseOffAt) >= 0) stopPulse();
-
-  // Continuous vibration -> repeated pulses
-  if (inMotion){
-    uint32_t motionDur = now - motionStartMs;
-    if (motionDur >= cfg_contThresh){
-      if (!pulseOn && (now - lastPulseStart) >= cfg_pulsePeriod){
-        startPulse(now, 2);
-      }
+    if(rebootAt&&bite::elapsed(now,rebootAt)>=700)ESP.restart();
+    if(calRequest){calRequest=false;stopOutputs();if(!sensor.beginCalibration(now))notice="Calibration unavailable: IMU fault";}
+    if(testRequest){testRequest=false;if(sensor.state()==bite::State::Disarmed||sensor.state()==bite::State::Armed){alarmPulse.start(now,pulseMs);++pulseCount;}else notice=tr("Test rejected: sensor not ready","Тест отклонён: датчик не готов");}
+    auto oldState=sensor.state();imuSession.supervise(imu,sensor,now);
+    if(!imuSession.online())stopOutputs();
+    if(imuSession.due(now)){
+        bite::Vec3 sample;uint8_t event=0;auto result=imuSession.read(imu,sensor,now,sample,event);
+        if(result==bite::ReadStatus::Fresh){
+            if(event&&sensor.state()==bite::State::Armed){alarmPulse.start(now,pulseMs);++pulseCount;sendPacket(event);}
+            if(csv){const auto& t=sensor.telemetry();char line[220];
+                int n=snprintf(line,sizeof(line),"%lu,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%s,%u,%u\n",(unsigned long)now,sample.x,sample.y,sample.z,t.signal.dynamic,t.signal.legacy,t.noiseG,t.effectiveG,bite::stateName(sensor.state()),unsigned(event),unsigned(mode));
+                if(n<=0||n>=int(sizeof(line))||!csvBuffer.append(line,size_t(n)))++csvDrops;
+            }
+        }else if(result==bite::ReadStatus::TransportError){++readErrors;stopOutputs();}
+        else ++noNew;
     }
-  }
+    auto state=sensor.state();if(state!=oldState){
+        if(state!=bite::State::Armed)alarmPulse.stop();
+        if(state==bite::State::Disarmed){disarmedClock.enter(now);sleepAttempted=false;}
+        if(state==bite::State::Fault){stopOutputs();armUi=false;db.set(kk::armedSw,false);disarmedClock.enter(now);sleepAttempted=false;enterConfig(now);}
+    }
+    armUi=sensor.desiredArmed();
+    if(sensor.desiredArmed()&&apActive&&apClock.expired(now,120000)){WiFi.softAPdisconnect(false);WiFi.mode(WIFI_STA);apActive=false;}
+    if(state==bite::State::Disarmed&&!sensor.desiredArmed()&&!csv&&!sleepAttempted&&disarmedClock.expired(now,180000)&&WiFi.softAPgetStationNum()==0)enterSleep("idle",false,now);
+    if(bite::elapsed(now,lastRate)>=1000){sampleRate=(sensor.telemetry().samples-rateSamples)*1000.f/bite::elapsed(now,lastRate);rateSamples=sensor.telemetry().samples;lastRate=now;}
+    static uint32_t lastLowAttempt=0;static bool lowSeen=false;
+    if(bite::elapsed(now,lastBattery)>=5000){lastBattery=now;updateBattery();
+        if(batteryPct>25)lowSeen=false;
+        if(startup::batteryKnown(vbat)&&sensor.desiredArmed()&&batteryPct<=20&&(!lowSeen||bite::elapsed(now,lastLowAttempt)>=60000)){lastLowAttempt=now;lowSeen=sendPacket(3);}
+        // Cell protection: three readings below 3.30 V -> tell the hub (if armed) and sleep.
+        if(lowBattery.update(startup::batteryKnown(vbat),vbat)){if(sensor.desiredArmed())sendPacket(3);delay(50);enterSleep("battery",true,now);}}
+    if(state==bite::State::Fault||state==bite::State::Calibrating||state==bite::State::MotionSuppressed||state==bite::State::Settling)alarmPulse.stop();
+    auto calibration=sensor.calibration();
+    if(calibration==bite::Calibration::Success&&previousCalibration!=calibration){
+        db.set("calNoiseG",sensor.telemetry().noiseG);
+        notice=flushSettings()?tr("Noise calibration saved","Калибровка шума сохранена"):tr("Calibration valid in RAM; save failed","Калибровка в RAM; ошибка сохранения");
+    }
+    previousCalibration=calibration;
+    if(csv&&csvBuffer.size()){char chunk[128];int available=Serial.availableForWrite();if(available>0){size_t n=csvBuffer.peek(chunk,std::min<size_t>(sizeof(chunk),size_t(available)));csvBuffer.consume(Serial.write(reinterpret_cast<const uint8_t*>(chunk),n));}}
+    applyOutputs(now);
 }

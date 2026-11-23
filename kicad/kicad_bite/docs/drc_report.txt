@@ -1,0 +1,22 @@
+** Drc report for bite_sensor.kicad_pcb **
+** Created on 2026-11-22T20:15:42 **
+** Report includes: Errors, Warnings **
+
+** Found 1 DRC violations **
+[silk_edge_clearance]: Silkscreen clipped by board edge
+    Rule: board setup constraints silk; warning
+    @(97.0000 mm, 100.0000 mm): Rectangle on Edge.Cuts
+    @(96.8000 mm, 120.9000 mm): Rectangle of U5 on F.Silkscreen
+
+** Found 0 unconnected pads **
+
+** Found 0 Footprint errors **
+
+** Ignored checks **
+    - Footprint has no courtyard defined
+    - Track endpoint not centered on via
+    - Tuning profile track geometries
+    - Footprint doesn't match symbol's footprint filters
+    - Footprint component type doesn't match footprint pads
+
+** End of Report **

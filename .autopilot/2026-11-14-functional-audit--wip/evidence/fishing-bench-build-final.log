@@ -1,0 +1,162 @@
+Processing xiao_esp32c3 (board: seeed_xiao_esp32c3; platform: platformio/espressif32@8.0.0; framework: arduino)
+--------------------------------------------------------------------------------
+Verbose mode can be enabled via `-v, --verbose` option
+CONFIGURATION: https://docs.platformio.org/page/boards/espressif32/seeed_xiao_esp32c3.html
+PLATFORM: Espressif 32 (8.0.0) > Seeed Studio XIAO ESP32C3
+HARDWARE: ESP32C3 160MHz, 320KB RAM, 4MB Flash
+DEBUG: Current (cmsis-dap) External (cmsis-dap, esp-bridge, esp-builtin, esp-prog, iot-bus-jtag, jlink, minimodule, olimex-arm-usb-ocd, olimex-arm-usb-ocd-h, olimex-arm-usb-tiny-h, olimex-jtag-tiny, tumpa)
+PACKAGES: 
+ - framework-arduinoespressif32 @ 4.30312.261113 (3.3.12) 
+ - framework-arduinoespressif32-esp32c3-libs @ 3.3.12 
+ - tool-esptool @ 2.50400.0 (5.4.0) 
+ - tool-riscv32-esp-elf-gdb @ 12.1.0+20221002 
+ - tool-xtensa-esp-elf-gdb @ 12.1.0+20221002 
+ - toolchain-riscv32-esp @ 14.2.0+20260121 
+ - toolchain-xtensa-esp-elf @ 14.2.0+20260121
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 59 compatible libraries
+Scanning dependencies...
+Dependency Graph
+|-- GyverDB @ 1.4.4
+|-- Settings @ 1.4.3
+|-- EncButton @ 3.7.6
+|-- Adafruit LSM6DS @ 4.7.4
+|-- Adafruit Unified Sensor @ 1.1.15
+|-- Adafruit BusIO @ 1.17.4
+|-- LittleFS @ 3.3.12
+|-- WiFi @ 3.3.12
+|-- Wire @ 3.3.12
+Building in release mode
+Compiling .pio/build/xiao_esp32c3/src/main.cpp.o
+In file included from .pio/libdeps/xiao_esp32c3/Settings/src/./core/SettingsBase.h:18,
+                 from .pio/libdeps/xiao_esp32c3/Settings/src/SettingsT.h:9,
+                 from .pio/libdeps/xiao_esp32c3/Settings/src/SettingsGyver.h:4,
+                 from src/main.cpp:12:
+.pio/libdeps/xiao_esp32c3/Settings/src/./core/./HybridFS.h: In member function 'void FSWrapper::listDir(String&, const char*, char, char, const char*)':
+.pio/libdeps/xiao_esp32c3/Settings/src/./core/./HybridFS.h:125:41: warning: suggest parentheses around assignment used as truth value [-Wparentheses]
+  125 |         while (file = root.openNextFile()) {
+      |                                         ^
+Linking .pio/build/xiao_esp32c3/firmware.elf
+Retrieving maximum program size .pio/build/xiao_esp32c3/firmware.elf
+Checking size .pio/build/xiao_esp32c3/firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [=         ]  12.7% (used 41652 bytes from 327680 bytes)
+Flash: [========= ]  86.7% (used 1136243 bytes from 1310720 bytes)
+Building .pio/build/xiao_esp32c3/firmware.bin
+esptool v5.4.0
+Creating ESP32-C3 image...
+Merged 3 ELF sections.
+Successfully created ESP32-C3 image.
+========================= [SUCCESS] Took 9.53 seconds =========================
+
+Processing seeed_xiao_esp32s3 (board: seeed_xiao_esp32s3; platform: platformio/espressif32@8.0.0; framework: arduino)
+--------------------------------------------------------------------------------
+Verbose mode can be enabled via `-v, --verbose` option
+CONFIGURATION: https://docs.platformio.org/page/boards/espressif32/seeed_xiao_esp32s3.html
+PLATFORM: Espressif 32 (8.0.0) > Seeed Studio XIAO ESP32S3
+HARDWARE: ESP32S3 240MHz, 320KB RAM, 8MB Flash
+DEBUG: Current (cmsis-dap) External (cmsis-dap, esp-bridge, esp-builtin, esp-prog, iot-bus-jtag, jlink, minimodule, olimex-arm-usb-ocd, olimex-arm-usb-ocd-h, olimex-arm-usb-tiny-h, olimex-jtag-tiny, tumpa)
+PACKAGES: 
+ - framework-arduinoespressif32 @ 4.30312.261113 (3.3.12) 
+ - framework-arduinoespressif32-esp32s3-libs @ 3.3.12 
+ - tool-esptool @ 2.50400.0 (5.4.0) 
+ - tool-riscv32-esp-elf-gdb @ 12.1.0+20221002 
+ - tool-xtensa-esp-elf-gdb @ 12.1.0+20221002 
+ - toolchain-riscv32-esp @ 14.2.0+20260121 
+ - toolchain-xtensa-esp-elf @ 14.2.0+20260121
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 59 compatible libraries
+Scanning dependencies...
+Dependency Graph
+|-- GyverDB @ 1.4.4
+|-- Settings @ 1.4.3
+|-- EncButton @ 3.7.6
+|-- Adafruit LSM6DS @ 4.7.4
+|-- Adafruit Unified Sensor @ 1.1.15
+|-- Adafruit BusIO @ 1.17.4
+|-- LittleFS @ 3.3.12
+|-- WiFi @ 3.3.12
+|-- Wire @ 3.3.12
+Building in release mode
+Compiling .pio/build/seeed_xiao_esp32s3/src/main.cpp.o
+In file included from .pio/libdeps/seeed_xiao_esp32s3/Settings/src/./core/SettingsBase.h:18,
+                 from .pio/libdeps/seeed_xiao_esp32s3/Settings/src/SettingsT.h:9,
+                 from .pio/libdeps/seeed_xiao_esp32s3/Settings/src/SettingsGyver.h:4,
+                 from src/main.cpp:12:
+.pio/libdeps/seeed_xiao_esp32s3/Settings/src/./core/./HybridFS.h: In member function 'void FSWrapper::listDir(String&, const char*, char, char, const char*)':
+.pio/libdeps/seeed_xiao_esp32s3/Settings/src/./core/./HybridFS.h:125:41: warning: suggest parentheses around assignment used as truth value [-Wparentheses]
+  125 |         while (file = root.openNextFile()) {
+      |                                         ^
+Linking .pio/build/seeed_xiao_esp32s3/firmware.elf
+Retrieving maximum program size .pio/build/seeed_xiao_esp32s3/firmware.elf
+Checking size .pio/build/seeed_xiao_esp32s3/firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [==        ]  15.9% (used 52156 bytes from 327680 bytes)
+Flash: [===       ]  31.2% (used 1043241 bytes from 3342336 bytes)
+Building .pio/build/seeed_xiao_esp32s3/firmware.bin
+esptool v5.4.0
+Creating ESP32-S3 image...
+Merged 3 ELF sections.
+Successfully created ESP32-S3 image.
+========================= [SUCCESS] Took 10.79 seconds =========================
+
+Processing xiao_esp32c6 (board: seeed_xiao_esp32c6; platform: platformio/espressif32@8.0.0; framework: arduino)
+--------------------------------------------------------------------------------
+Verbose mode can be enabled via `-v, --verbose` option
+CONFIGURATION: https://docs.platformio.org/page/boards/espressif32/seeed_xiao_esp32c6.html
+PLATFORM: Espressif 32 (8.0.0) > Seeed Studio XIAO ESP32C6
+HARDWARE: ESP32C6 160MHz, 320KB RAM, 4MB Flash
+DEBUG: Current (cmsis-dap) External (cmsis-dap, esp-bridge, esp-builtin, esp-prog, iot-bus-jtag, jlink, minimodule, olimex-arm-usb-ocd, olimex-arm-usb-ocd-h, olimex-arm-usb-tiny-h, olimex-jtag-tiny, tumpa)
+PACKAGES: 
+ - framework-arduinoespressif32 @ 4.30312.261113 (3.3.12) 
+ - framework-arduinoespressif32-esp32c6-libs @ 3.3.12 
+ - tool-esptool @ 2.50400.0 (5.4.0) 
+ - tool-riscv32-esp-elf-gdb @ 12.1.0+20221002 
+ - tool-xtensa-esp-elf-gdb @ 12.1.0+20221002 
+ - toolchain-riscv32-esp @ 14.2.0+20260121 
+ - toolchain-xtensa-esp-elf @ 14.2.0+20260121
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 59 compatible libraries
+Scanning dependencies...
+Dependency Graph
+|-- GyverDB @ 1.4.4
+|-- Settings @ 1.4.3
+|-- EncButton @ 3.7.6
+|-- Adafruit LSM6DS @ 4.7.4
+|-- Adafruit Unified Sensor @ 1.1.15
+|-- Adafruit BusIO @ 1.17.4
+|-- LittleFS @ 3.3.12
+|-- WiFi @ 3.3.12
+|-- Wire @ 3.3.12
+Building in release mode
+Compiling .pio/build/xiao_esp32c6/src/main.cpp.o
+In file included from .pio/libdeps/xiao_esp32c6/Settings/src/./core/SettingsBase.h:18,
+                 from .pio/libdeps/xiao_esp32c6/Settings/src/SettingsT.h:9,
+                 from .pio/libdeps/xiao_esp32c6/Settings/src/SettingsGyver.h:4,
+                 from src/main.cpp:12:
+.pio/libdeps/xiao_esp32c6/Settings/src/./core/./HybridFS.h: In member function 'void FSWrapper::listDir(String&, const char*, char, char, const char*)':
+.pio/libdeps/xiao_esp32c6/Settings/src/./core/./HybridFS.h:125:41: warning: suggest parentheses around assignment used as truth value [-Wparentheses]
+  125 |         while (file = root.openNextFile()) {
+      |                                         ^
+Linking .pio/build/xiao_esp32c6/firmware.elf
+Retrieving maximum program size .pio/build/xiao_esp32c6/firmware.elf
+Checking size .pio/build/xiao_esp32c6/firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [=         ]  14.8% (used 48552 bytes from 327680 bytes)
+Flash: [========= ]  89.2% (used 1168578 bytes from 1310720 bytes)
+Building .pio/build/xiao_esp32c6/firmware.bin
+esptool v5.4.0
+Creating ESP32-C6 image...
+Merged 3 ELF sections.
+Successfully created ESP32-C6 image.
+========================= [SUCCESS] Took 9.00 seconds =========================
+
+Environment         Status    Duration
+------------------  --------  ------------
+xiao_esp32c3        SUCCESS   00:00:09.535
+seeed_xiao_esp32s3  SUCCESS   00:00:10.792
+xiao_esp32c6        SUCCESS   00:00:08.996
+========================= 3 succeeded in 00:00:29.322 =========================

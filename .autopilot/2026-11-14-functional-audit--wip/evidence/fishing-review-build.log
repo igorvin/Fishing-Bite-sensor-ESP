@@ -1,0 +1,315 @@
+Processing xiao_esp32c3 (platform: https://github.com/pioarduino/platform-espressif32/releases/download/stable/platform-espressif32.zip; framework: arduino; board: seeed_xiao_esp32c3)
+--------------------------------------------------------------------------------
+Platform Manager: Installing https://github.com/pioarduino/platform-espressif32/releases/download/stable/platform-espressif32.zip
+Downloading 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Platform Manager: espressif32@55.3.312 has been installed!
+Tool Manager: Installing https://github.com/pioarduino/esp_install/releases/download/v5.3.5/esp_install-v5.3.5.zip
+Downloading 0% 10% 20% 30% 40% 50% 60% 70%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Tool Manager: tool-esp_install@5.3.5 has been installed!
+Created pioarduino Python virtual environment: /private/tmp/fishing-review-pio/penv
+Tool Manager: Installing https://github.com/espressif/arduino-esp32/releases/download/3.3.12/esp32-core-3.3.12.tar.xz
+Downloading 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Tool Manager: framework-arduinoespressif32@3.3.12 has been installed!
+Tool Manager: Installing https://github.com/espressif/arduino-esp32/releases/download/3.3.12/esp32-core-3.3.12-libs.tar.xz
+Downloading 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Tool Manager: framework-arduinoespressif32-libs@5.5.5+sha.b774170ff46 has been installed!
+Tool Manager: Installing https://github.com/pioarduino/registry/releases/download/0.0.1/riscv32-esp-elf-14.2.0_20260121.zip
+Downloading 0% 10%
+Unpacking 0% 10% 20%
+Tool Manager: toolchain-riscv32-esp@14.2.0+20260121 has been installed!
+Tool Manager: Installing https://github.com/pioarduino/registry/releases/download/0.0.1/riscv32-esp-gdb-17.1_20260402.zip
+Downloading 0% 10%
+Unpacking 0% 10% 20%
+Tool Manager: tool-riscv32-esp-elf-gdb@17.1.0+20260402 has been installed!
+Tool Manager: Installing https://github.com/pioarduino/registry/releases/download/0.0.1/esptoolpy-v5.4.0.zip
+Downloading 0% 10%
+Unpacking 0% 10% 20%
+Tool Manager: tool-esptoolpy@5.4.0 has been installed!
+Tool Manager: Installing https://github.com/pioarduino/registry/releases/download/0.0.1/contrib-piohome-3.4.4.tar.gz
+Downloading 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Tool Manager: contrib-piohome@3.4.4 has been installed!
+Tool Manager: Installing platformio/tool-scons @ ~4.41101.0
+Downloading 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Tool Manager: tool-scons@4.41101.0 has been installed!
+Library Manager: Installing gyverlibs/GyverDB
+Downloading 0% 10% 20% 30%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Library Manager: GyverDB@1.4.4 has been installed!
+Library Manager: Resolving dependencies...
+Library Manager: Installing GTL
+Downloading 0% 10% 20% 30%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Library Manager: GTL@1.4.7 has been installed!
+Library Manager: Installing StringUtils
+Downloading 0% 10% 20% 30% 40% 50% 60%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Library Manager: StringUtils@1.6.1 has been installed!
+Library Manager: Installing StreamIO
+Downloading 0% 10%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80%
+Library Manager: StreamIO@1.0.5 has been installed!
+Library Manager: Installing FOR_MACRO
+Downloading 0% 10% 20%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70%
+Library Manager: FOR_MACRO@1.0.0 has been installed!
+Library Manager: Installing gyverlibs/Settings
+Downloading 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Library Manager: Settings@1.4.3 has been installed!
+Library Manager: Resolving dependencies...
+Library Manager: Installing GyverHTTP
+Downloading 0% 10% 20% 30%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Library Manager: GyverHTTP@1.0.34 has been installed!
+Library Manager: Resolving dependencies...
+Library Manager: Installing BSON
+Downloading 0% 10% 20% 30%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Library Manager: BSON@3.0.1 has been installed!
+Library Manager: Resolving dependencies...
+Library Manager: Installing Stamp
+Downloading 0% 10% 20% 30%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Library Manager: Stamp@1.5.1 has been installed!
+Library Manager: Installing Table
+Downloading 0% 10% 20% 30%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Library Manager: Table@1.3.6 has been installed!
+Library Manager: Resolving dependencies...
+Library Manager: Installing gyverlibs/EncButton
+Downloading 0% 10% 20% 30% 40% 50% 60% 70%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Library Manager: EncButton@3.7.6 has been installed!
+Library Manager: Resolving dependencies...
+Library Manager: Installing GyverIO
+Downloading 0% 10% 20% 30%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Library Manager: GyverIO@1.4.2 has been installed!
+Library Manager: Installing adafruit/Adafruit LSM6DS
+Downloading 0% 10% 20% 30%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Library Manager: Adafruit LSM6DS@4.7.4 has been installed!
+Library Manager: Resolving dependencies...
+Library Manager: Installing Adafruit Unified Sensor
+Downloading 0% 10% 20%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70%
+Library Manager: Adafruit Unified Sensor@1.1.15 has been installed!
+Library Manager: Installing Adafruit BusIO
+Downloading 0% 10% 20% 30%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Library Manager: Adafruit BusIO@1.17.4 has been installed!
+Tool Manager: Installing file:///private/tmp/fishing-review-pio/tools/tool-esptoolpy
+Tool Manager: tool-esptoolpy@5.4.0 has been installed!
+Tool Manager: Installing file:///private/tmp/fishing-review-pio/tools/toolchain-riscv32-esp
+Tool Manager: toolchain-riscv32-esp@14.2.0+20260121 has been installed!
+Tool Manager: Installing file:///private/tmp/fishing-review-pio/tools/tool-riscv32-esp-elf-gdb
+Tool Manager: tool-riscv32-esp-elf-gdb@17.1.0+20260402 has been installed!
+Installed freertos-gdb into /private/tmp/fishing-review-pio/packages/tool-riscv32-esp-elf-gdb/share/gdb/python
+Verbose mode can be enabled via `-v, --verbose` option
+Installed esptool from tl-install path: /private/tmp/fishing-review-pio/packages/tool-esptoolpy
+CONFIGURATION: https://docs.platformio.org/page/boards/espressif32/seeed_xiao_esp32c3.html
+PLATFORM: Espressif 32 (55.3.312) > Seeed Studio XIAO ESP32C3
+HARDWARE: ESP32C3 160MHz, 320KB RAM, 4MB Flash
+DEBUG: Current (cmsis-dap) External (cmsis-dap, esp-bridge, esp-builtin, esp-prog, esp-prog-2, iot-bus-jtag, jlink, minimodule, olimex-arm-usb-ocd, olimex-arm-usb-ocd-h, olimex-arm-usb-tiny-h, olimex-jtag-tiny, tumpa)
+PACKAGES: 
+ - contrib-piohome @ 3.4.4 
+ - framework-arduinoespressif32 @ 3.3.12 
+ - framework-arduinoespressif32-libs @ 5.5.5+sha.b774170ff46 
+ - tool-esptoolpy @ 5.4.0 
+ - tool-riscv32-esp-elf-gdb @ 17.1.0+20260402 
+ - toolchain-riscv32-esp @ 14.2.0+20260121
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 59 compatible libraries
+Scanning dependencies...
+Dependency Graph
+|-- GyverDB @ 1.4.4
+|-- Settings @ 1.4.3
+|-- EncButton @ 3.7.6
+|-- Adafruit LSM6DS @ 4.7.4
+|-- Adafruit Unified Sensor @ 1.1.15
+|-- Adafruit BusIO @ 1.17.4
+|-- LittleFS @ 3.3.12
+|-- WiFi @ 3.3.12
+|-- Wire @ 3.3.12
+Building in release mode
+Compiling .pio/build/xiao_esp32c3/lib589/FS/FS.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib589/FS/vfs_api.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib737/StringUtils/utils/StrSplit.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib737/StringUtils/utils/convert/b64.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib737/StringUtils/utils/convert/convert.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib737/StringUtils/utils/convert/qwerty.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib737/StringUtils/utils/convert/unicode.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib737/StringUtils/utils/convert/url.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib737/StringUtils/utils/hash.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib737/StringUtils/utils/list.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib484/Hash/PBKDF2_HMACBuilder.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib484/Hash/SHA1Builder.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib484/Hash/SHA2Builder.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib484/Hash/SHA3Builder.cpp.o
+Compiling .pio/build/xiao_esp32c3/libc54/Update/HttpsOTAUpdate.cpp.o
+Compiling .pio/build/xiao_esp32c3/libc54/Update/Updater.cpp.o
+Compiling .pio/build/xiao_esp32c3/libc54/Update/UpdaterSHA256.cpp.o
+Compiling .pio/build/xiao_esp32c3/libc54/Update/UpdaterSHA512.cpp.o
+Compiling .pio/build/xiao_esp32c3/libc54/Update/Updater_Signing.cpp.o
+Compiling .pio/build/xiao_esp32c3/liba4a/Network/NetworkClient.cpp.o
+Compiling .pio/build/xiao_esp32c3/liba4a/Network/NetworkEvents.cpp.o
+Compiling .pio/build/xiao_esp32c3/liba4a/Network/NetworkInterface.cpp.o
+Compiling .pio/build/xiao_esp32c3/liba4a/Network/NetworkManager.cpp.o
+Compiling .pio/build/xiao_esp32c3/liba4a/Network/NetworkServer.cpp.o
+Compiling .pio/build/xiao_esp32c3/liba4a/Network/NetworkUdp.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib0ec/WiFi/AP.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib0ec/WiFi/STA.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib0ec/WiFi/WiFi.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib0ec/WiFi/WiFiAP.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib0ec/WiFi/WiFiGeneric.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib0ec/WiFi/WiFiMulti.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib0ec/WiFi/WiFiSTA.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib0ec/WiFi/WiFiScan.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib891/NetworkClientSecure/NetworkClientSecure.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib891/NetworkClientSecure/ssl_client.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib495/LittleFS/LittleFS.cpp.o
+Compiling .pio/build/xiao_esp32c3/libf71/AsyncUDP/AsyncUDP.cpp.o
+Compiling .pio/build/xiao_esp32c3/libdf9/DNSServer/DNSServer.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib5a0/ESPmDNS/ESPmDNS.cpp.o
+Compiling .pio/build/xiao_esp32c3/libff1/Stamp/core/StampUtils.cpp.o
+Compiling .pio/build/xiao_esp32c3/libff1/Stamp/core/stamp_zone.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib3ec/Settings/core/SettingsBase_class.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib3ec/Settings/core/ota.cpp.o
+Compiling .pio/build/xiao_esp32c3/libd9d/SPI/SPI.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib461/GyverIO/shift/shift.cpp.o
+Compiling .pio/build/xiao_esp32c3/libe04/EncButton/core/io.cpp.o
+Compiling .pio/build/xiao_esp32c3/libe04/EncButton/core/self.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib084/Wire/Wire.cpp.o
+Compiling .pio/build/xiao_esp32c3/libb6d/Adafruit BusIO/Adafruit_BusIO_Register.cpp.o
+Compiling .pio/build/xiao_esp32c3/libb6d/Adafruit BusIO/Adafruit_GenericDevice.cpp.o
+Compiling .pio/build/xiao_esp32c3/libb6d/Adafruit BusIO/Adafruit_I2CDevice.cpp.o
+Compiling .pio/build/xiao_esp32c3/libb6d/Adafruit BusIO/Adafruit_SPIDevice.cpp.o
+Compiling .pio/build/xiao_esp32c3/libf24/Adafruit Unified Sensor/Adafruit_Sensor.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib661/Adafruit LSM6DS/Adafruit_ISM330DHCX.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib661/Adafruit LSM6DS/Adafruit_LSM6DS.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib661/Adafruit LSM6DS/Adafruit_LSM6DS3.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib661/Adafruit LSM6DS/Adafruit_LSM6DS33.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib661/Adafruit LSM6DS/Adafruit_LSM6DS3TRC.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib661/Adafruit LSM6DS/Adafruit_LSM6DSL.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib661/Adafruit LSM6DS/Adafruit_LSM6DSO32.cpp.o
+Compiling .pio/build/xiao_esp32c3/lib661/Adafruit LSM6DS/Adafruit_LSM6DSOX.cpp.o
+Compiling .pio/build/xiao_esp32c3/src/main.cpp.o
+Building .pio/build/xiao_esp32c3/bootloader.bin
+Generating partitions .pio/build/xiao_esp32c3/partitions.bin
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/ColorFormat.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/Esp.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/FirmwareMSC.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/FunctionalInterrupt.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/HEXBuilder.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/HWCDC.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/HardwareSerial.cpp.o
+esptool v5.4.0
+Creating ESP32-C3 image...
+Merged 2 ELF sections.
+Successfully created ESP32-C3 image.
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/HashBuilder.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/IPAddress.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/MD5Builder.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/MacAddress.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/Print.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/Stream.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/StreamString.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/StringUtils.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/Tone.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/USB.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/USBCDC.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/USBHost.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/USBMSC.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/WMath.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/WString.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/base64.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/cbuf.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/chip-debug-report.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-adc.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-bt.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-cpu.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-dac.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-gpio.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-hosted.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-i2c-ng.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-i2c-slave.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-i2c.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-ldo.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-ledc.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-log-wrapper.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-matrix.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-misc.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-periman.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-psram.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-rgb-led.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-rmt.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-sigmadelta.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-spi.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-time.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-timer.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-tinyusb.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-touch-ng.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-touch.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/esp32-hal-uart.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/firmware_msc_fat.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/freertos_stats.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/idf_openthread_mpool_wrapper.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/libb64/cdecode.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/libb64/cencode.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/main.cpp.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/stdlib_noniso.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/wiring_pulse.c.o
+Compiling .pio/build/xiao_esp32c3/FrameworkArduino/wiring_shift.c.o
+Archiving .pio/build/xiao_esp32c3/libFrameworkArduino.a
+Indexing .pio/build/xiao_esp32c3/libFrameworkArduino.a
+Linking .pio/build/xiao_esp32c3/firmware.elf
+                            Memory Type Usage Summary                             
+┏━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┓
+┃ Memory Type/Section ┃ Used [bytes] ┃ Used [%] ┃ Remain [bytes] ┃ Total [bytes] ┃
+┡━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━┩
+│ Flash Code          │       956932 │          │                │               │
+│    .text            │       956932 │          │                │               │
+│ Flash Data          │       231176 │          │                │               │
+│    .rodata          │       188472 │          │                │               │
+│    .eh_frame        │        42120 │          │                │               │
+│    .init_array      │          328 │          │                │               │
+│    .appdesc         │          256 │          │                │               │
+│ DRAM                │       106161 │    33.04 │         215135 │        321296 │
+│    .text            │        64632 │    20.12 │                │               │
+│    .bss             │        27552 │     8.58 │                │               │
+│    .data            │        13977 │     4.35 │                │               │
+│ RTC SLOW            │           20 │     0.24 │           8172 │          8192 │
+│    .text            │           20 │     0.24 │                │               │
+└─────────────────────┴──────────────┴──────────┴────────────────┴───────────────┘
+Total image size: 1266737 bytes (.bin may be padded larger)
+Note: The reported total sizes may be smaller than those in the technical reference manual due to reserved memory and application configuration. The total flash size available for the application is not included by default, as it cannot be reliably determined due to the presence of other data like the bootloader, partition table, and application partition size. The total external RAM size is not included either, because the amount of RAM connected to the chip is detected at boot and is not known during the build.
+Retrieving maximum program size .pio/build/xiao_esp32c3/firmware.elf
+Checking size .pio/build/xiao_esp32c3/firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [=         ]  12.7% (used 41532 bytes from 327680 bytes)
+Flash: [========= ]  93.4% (used 1224013 bytes from 1310720 bytes)
+Building .pio/build/xiao_esp32c3/firmware.bin
+esptool v5.4.0
+Creating ESP32-C3 image...
+Merged 4 ELF sections.
+Successfully created ESP32-C3 image.
+Creating binary "firmware.factory.bin" with:
+    Offset   | File
+ -  0x0000   | bootloader.bin
+ -  0x8000   | partitions.bin
+ -  0xe000   | boot_app0.bin
+ -  0x10000  | firmware.bin
+Successfully created combined binary image.
+======================== [SUCCESS] Took 235.51 seconds ========================
+
+Environment    Status    Duration
+-------------  --------  ------------
+xiao_esp32c3   SUCCESS   00:03:55.510
+========================= 1 succeeded in 00:03:55.510 =========================
