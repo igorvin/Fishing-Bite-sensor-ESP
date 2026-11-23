@@ -164,5 +164,27 @@ int main(){
   uint8_t mac[6]={2,0,0,0,0,1};startup::Sensor s;s.begin(mac,20);uint32_t t=0xffffff00u;s.announce(t,"Rod",false,0);CHECK(!s.due(t+699)&&s.due(t+700));
   CHECK(!startup::batteryKnown(.6f)&&!startup::batteryKnown(5.f)&&startup::batteryKnown(3.7f));char name[16];startup::copyName(name,"АБВГДЕЁЖЗ");CHECK(startup::nameValid(name));
  });
+ TEST("button-short-long-debounce",{
+  Button b;b.begin(false,0);
+  CHECK(b.update(true,10)==ButtonEvent::None&&b.update(false,30)==ButtonEvent::None&&b.update(false,200)==ButtonEvent::None);// 20 ms bounce ignored
+  CHECK(b.update(true,1000)==ButtonEvent::None&&b.update(true,1050)==ButtonEvent::None);
+  CHECK(b.update(false,1400)==ButtonEvent::None&&b.update(false,1450)==ButtonEvent::ShortPress);
+  CHECK(b.update(true,2000)==ButtonEvent::None&&b.update(true,2050)==ButtonEvent::None&&b.update(true,3549)==ButtonEvent::None);
+  CHECK(b.update(true,3550)==ButtonEvent::LongPress&&b.update(true,9000)==ButtonEvent::None);
+  CHECK(b.update(false,9100)==ButtonEvent::None&&b.update(false,9150)==ButtonEvent::None);// release after long is silent
+  Button held;held.begin(true,0);CHECK(held.update(true,5000)==ButtonEvent::None&&held.update(false,5100)==ButtonEvent::None&&held.update(false,5150)==ButtonEvent::None);
+  Button wrap;uint32_t t=0xffffff00u;wrap.begin(false,t);wrap.update(true,t);wrap.update(true,t+50);CHECK(wrap.update(true,t+1549)==ButtonEvent::None&&wrap.update(true,t+1550)==ButtonEvent::LongPress);
+ });
+ TEST("mac-screen-30s-alert-priority-and-close",{
+  Model m;m.begin(0);for(uint32_t t=0;t<=9000;t+=1000)m.tick(t);CHECK(m.power(9000)==Power::Off);
+  m.select(Screen::Mac,0,10000);CHECK(m.view(10000).screen==Screen::Mac&&m.power(10000)==Power::On&&m.manual());
+  m.ingest(event(1,1,12000),12000);CHECK(m.view(12000).screen==Screen::Alert);
+  m.tick(15600);CHECK(m.view(15600).screen==Screen::Mac);
+  m.tick(39999);CHECK(m.view(39999).screen==Screen::Mac);m.tick(40000);CHECK(!m.manual()&&m.power(48000)==Power::Off);
+  m.select(Screen::Mac,0,50000);m.close(51000);CHECK(!m.manual()&&m.power(51000)==Power::Off);
+  Diagnostics d;std::strcpy(d.mac,"AA:BB:CC:DD:EE:FF");m.select(Screen::Mac,0,52000);Frame f=render(m,52000,-1,d);
+  int lit=0;for(int y=30;y<64;++y)for(int x=0;x<128;++x)lit+=f.pixel(x,y);CHECK(lit>300);
+  Diagnostics none;Frame g=render(m,52000,-1,none);CHECK(g.bytes!=f.bytes);
+ });
  std::printf("%d tests, 0 failed\n",count);
 }

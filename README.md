@@ -34,12 +34,13 @@
 - 🎯 **Sensitive detection.** The LSM6DS3 accelerometer is read 104 times per second. The *Dynamic XYZ* algorithm removes gravity and reacts to a jolt in any direction, including across the rod.
 - 🔇 **Noise protection.** At start-up the sensor measures background vibration for 2 seconds and raises its threshold automatically in a noisy setting (wind, rod rest).
 - 🎣 **Pause while handling the rod.** When you pick up or tilt the rod, alarms pause. Once the rod is still again in its **new** position, the sensor re-arms by itself.
-- 🔔 **Local signals.** Green LED means armed; red LED and buzzer mean a bite. Volume and brightness are adjustable.
+- 🔔 **Local signals.** While armed the green LED is on and the red LED gives a short flash every second, so you can see the sensor is working. A bite is red LED plus buzzer. Volume and brightness are adjustable.
 - 📡 **ESP-NOW radio to the hub.** Three events: first bite, continuing bite, low battery.
 - 📱 **Phone setup.** The sensor runs its own Wi-Fi access point with a page at `http://192.168.4.1`, in English or Russian.
 - 🔘 **One button** for arming, disarming, deep sleep and wake.
 - 🔋 **Battery saving.** The sensor sleeps on a button hold or by itself after 3 idle minutes. A brush against the button in a bag does not wake it. Below 3.30 V it also goes to sleep to protect the cell.
 - 💾 **Settings are kept** in flash and survive firmware updates.
+- 🧾 **Event journal.** The sensor records what it decided and why: button presses, calibrations, arming. Read it over USB with `log` or in *Details*.
 
 **Hub (receiver)**
 
@@ -47,13 +48,14 @@
 - 📳 Vibration motor with different patterns for a bite, a continuing bite and a sensor's low battery.
 - 🎣 Up to 8 sensors per hub, log of the last 12 events.
 - 🌙 The screen turns off after 8 seconds and wakes only for a new alert.
+- 🔘 Button: hold 1.5 s to show the hub MAC for pairing, short press for the status screen.
 
 ## What you need
 
 | Device | Parts | Notes |
 |---|---|---|
 | **Sensor** | Seeed XIAO ESP32-C3 (bench) or XIAO ESP32-S3 (PCB v4), LSM6DS3 module (I²C), green and red LEDs, passive buzzer (through a transistor), momentary push button, 3.7 V Li-ion cell, 100 kΩ / 100 kΩ battery divider | A KiCad v4.1 board and an 18650 enclosure are in [`kicad/kicad_bite`](kicad/kicad_bite) |
-| **Hub** | XIAO ESP32-C3 or S3, SH1106 128×64 OLED (I²C), vibration motor through a MOSFET, LED, Li-ion cell, 100 kΩ / 100 kΩ divider | Separate firmware in [`ESP_HUB/`](ESP_HUB) |
+| **Hub** | XIAO ESP32-C3 or S3, SH1106 128×64 OLED (I²C), vibration motor through a MOSFET, push button, LED, Li-ion cell, 100 kΩ / 100 kΩ divider | Separate firmware in [`ESP_HUB/`](ESP_HUB). Circuit and parts: [docs/hub-hardware.md](docs/hub-hardware.md) (Russian) |
 | **Phone** | Any smartphone with Wi-Fi and a browser | Only for configuration |
 | **Computer** | [PlatformIO](https://platformio.org/install), USB-C cable | For flashing |
 
@@ -94,7 +96,12 @@ Button D1 (external 10k pull-up), battery D0, red LED D8, green LED D9, buzzer D
 | OLED SDA / SCL | D4 / D5 |
 | LED | D1 |
 | Motor MOSFET | D2 |
+| Button (to GND) | D3 |
 | Battery (100k/100k divider) | A0 |
+
+<p align="center"><img src="docs/images/hub-wiring.svg" width="820" alt="Hub wiring diagram"></p>
+
+Choosing and wiring the vibration motor, with the parts list: [docs/hub-hardware.md](docs/hub-hardware.md) (Russian). In short: an AO3400A MOSFET with 100 Ω gate resistor and 100 kΩ gate pull-down, an SS14 flyback diode across the motor, 10 µF + 100 nF on the motor supply, motor powered from 3V3.
 
 > ⚠️ Drive the motor and any loud buzzer through a transistor, never straight from a pin. Connect the Li-ion cell to the XIAO **BAT+ / BAT−** pads, not to 3V3. Power details: [docs/power-and-wiring.md](docs/power-and-wiring.md).
 
@@ -138,7 +145,7 @@ Button D1 (external 10k pull-up), battery D0, red LED D8, green LED D9, buzzer D
 
 The sensor sends events only to the hub whose MAC address you give it.
 
-1. **Find the hub's MAC.** Open the hub's serial monitor and restart the hub (RESET button or reconnect USB). It prints `Hub MAC: AA:BB:CC:DD:EE:FF`.
+1. **Find the hub's MAC.** Hold the hub button for 1.5 seconds: the MAC appears on the screen in large digits for 30 seconds. Without the button: open the hub's serial monitor and type `mac`.
 
    ```bash
    pio device monitor -d ESP_HUB --port <PORT> --baud 115200
@@ -230,7 +237,7 @@ The **Page** menu at the top has three sections: *Status*, *Sensor* and *Setting
 
 1. **Power on or wake the sensor.** Hold the button for about 1 second until it beeps. The sensor measures the background straight away, so **keep it still for 2 seconds**.
 2. **Mount the sensor on the rod** and put the rod on its rest.
-3. **Arm.** Hold the button for 1–3 seconds: a short beep sounds at 1 second, then release; a confirmation beep follows. The sensor waits 1.5 seconds for the rod to settle (*SETTLING*), then the **green LED** turns on: armed.
+3. **Arm.** Hold the button for 1–3 seconds: a short beep sounds at 1 second, then release; a confirmation beep follows. The sensor waits 1.5 seconds for the rod to settle (*SETTLING*), then the **green LED** turns on and the red LED starts a short flash every second: armed. If the sensor has not been calibrated yet, it starts calibrating 1 second after you release the button (do not touch it for 2 seconds).
 4. **Bite:** red LED and buzzer on the sensor, screen and vibration on the hub. The signal repeats while the line keeps moving.
 5. **Picked up the rod?** No need to disarm: the sensor pauses alarms and re-arms by itself once the rod is still again, in its new position.
 6. **Disarm** with the same 1–3 second hold: the green LED goes out and you hear a short beep.
@@ -246,7 +253,7 @@ The **Page** menu at the top has three sections: *Status*, *Sensor* and *Setting
 
 | Action | Result |
 |---|---|
-| Hold 1–3 s and release | Short beep at 1 s; on release the sensor arms or disarms |
+| Hold 1–3 s and release | Short beep at 1 s; on release the sensor arms or disarms. If not calibrated, calibration starts 1 s after release |
 | Hold ≥ 3 s and release | Long beep at 3 s; on release it disarms, saves settings and sleeps |
 | Touch < 1 s while asleep | Nothing: it goes straight back to sleep (protection against presses in a bag) |
 | Hold ≈ 1 s while asleep | Beep, wake, calibration, DISARMED. The sensor registers with the hub again |
@@ -258,7 +265,8 @@ The **Page** menu at the top has three sections: *Status*, *Sensor* and *Setting
 | Situation | Green | Red | Buzzer | Hub |
 |---|---|---|---|---|
 | Disarmed | — | — | short beep when disarming | — |
-| Armed | on | — | beep when arming | — |
+| Armed | on | short flash every second | beep when arming | — |
+| **ARM cancelled**: the sensor moved during calibration | — | 3 flashes | 3 short beeps | — |
 | Bite (event 1) | on | flash | short signal | screen + 300 ms vibration |
 | Continuing bite (event 2) | on | repeated flashes | repeated signals | 800 ms vibration at the start of the episode |
 | Rod being moved (pause) | — | — | silent | — |
@@ -306,8 +314,12 @@ After power-on the hub shows for about 8 seconds how many sensors it has seen an
 
 <sub>Frames are produced by the hub's own drawing code (`ESP_HUB/tools/render_preview.py`) with example names. The hub's interface is in Russian.</sub>
 
+**Hub button (D3):** hold 1.5 s for the hub MAC (30 seconds); short press for the status screen (another short press turns the screen off). Alerts always take priority.
+
+<p align="center"><img src="docs/images/hub-mac.png" width="256" alt="Hub MAC screen"></p>
+
 - Rod numbers (01, 02, …) follow the order in which sensors first appear after the hub starts. After a hub restart the list and log start empty.
-- The hub has no buttons. List, log and service screens open with serial commands: `summary`, `list`, `history`, `service`, `status`, `help`.
+- List, log and service screens open with serial commands: `summary`, `list`, `history`, `service`, `mac`, `status`, `help`. `motor` runs the motor for 300 ms as a wiring test.
 - More: [ESP_HUB/README.md](ESP_HUB/README.md), [docs/hub-testing.md](docs/hub-testing.md).
 
 ## Tuning sensitivity
@@ -330,14 +342,14 @@ After power-on the hub shows for about 8 seconds how many sensors it has seen an
 | Problem | What to do |
 |---|---|
 | No `BiteSensor` network | The sensor is asleep: hold the button ~1 s. If it has been armed for over 2 minutes, Wi-Fi is already off: disarm with the button. If you renamed the network, look for the new name |
-| Will not arm | Calibration may have been rejected because of movement. Keep the sensor still, press "Calibrate" and try again. Watch the *State* row |
+| Will not arm | Three short beeps mean the ARM was cancelled: the sensor moved during calibration (often a finger on the button or the board). Let go, wait 2–3 seconds and arm again. The `log` USB command or "Recent events" in *Details* shows the reason |
 | "IMU FAULT" | Check the LSM6DS3 wiring (SDA D4, SCL D5, 3.3 V, GND). After recovery the sensor recalibrates by itself, but you must arm it again |
 | Hub shows no bites | Check the hub MAC and the "ESP-NOW enabled" switch; *Status* should say "Registered at startup". Alarms go to the hub only while armed |
 | Many false alarms | Raise the threshold or noise multiplier; make sure the sensor is mounted firmly |
 | Battery "No valid reading" | Normal when powered from USB without a cell |
 | "FS ERROR" in details | Flash cannot be read; settings work only until the next reboot. Do not format the flash, or old settings will be lost |
 
-**Sensor USB commands** (serial monitor, 115200): `status` — state, `sleep` — go to sleep, `register` — repeat hub registration, `peer AA:BB:CC:DD:EE:FF` — set the hub. `sleep`, `register` and `peer` work only while disarmed.
+**Sensor USB commands** (serial monitor, 115200): `status` — state, `log` — journal of the last 32 events, `sleep` — go to sleep, `register` — repeat hub registration, `peer AA:BB:CC:DD:EE:FF` — set the hub. `sleep`, `register` and `peer` work only while disarmed.
 
 ## For developers
 

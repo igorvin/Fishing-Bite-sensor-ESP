@@ -10,12 +10,14 @@
 #include "DriverSession.h"
 #include <new>
 
-// Existing hub wiring. No menu button is assigned; confirmed buttonless hub.
-constexpr int LedPin=D1,MotorPin=D2,BatteryPin=A0;
+// Existing hub wiring plus one button on D3 to GND (internal pull-up, added 2026-11-23):
+// short press = status screen / close a screen, hold 1.5 s = hub MAC for 30 s.
+constexpr int LedPin=D1,MotorPin=D2,BatteryPin=A0,ButtonPin=D3;
 constexpr uint8_t RadioChannel=1; // Existing sensor softAP defaults to channel 1; verify on the physical pair.
 hub::DriverSession<Adafruit_SH1106G> oled;
 hub::Model model;
 hub::Motor motor;
+hub::Button button;
 struct Incoming {bool control=false;hub::Event event{};startup::Message message{};};
 hub::Ring<Incoming,hub::RxDepth> inbox;
 startup::Discovery discovery;bool discoveryStarted=false;uint32_t controlReceived=0,controlSent=0;
@@ -52,12 +54,13 @@ void beginRadio(uint32_t now){
  if(radioReady||(radioAttempted&&hub::elapsed(now,radioAttemptAt)<2000))return;
  radioAttempted=true;radioAttemptAt=now;
  WiFi.mode(WIFI_STA);WiFi.setSleep(false);
+ // The station MAC is known once STA mode is on, even if ESP-NOW then fails.
+ if(!hubMac[0]){String mac=WiFi.macAddress();mac.toCharArray(hubMac,sizeof(hubMac));}
  if(esp_wifi_set_channel(RadioChannel,WIFI_SECOND_CHAN_NONE)!=ESP_OK)return;
  if(esp_now_init()!=ESP_OK)return;
  if(esp_now_register_recv_cb(onReceive)!=ESP_OK){esp_now_deinit();return;}
  radioReady=true;
  if(!discoveryStarted){discovery.begin(esp_random(),now);discoveryStarted=true;}
- String mac=WiFi.macAddress();mac.toCharArray(hubMac,sizeof(hubMac));
  Serial.print("Hub MAC: ");Serial.println(hubMac);
 }
 bool probe(uint8_t address){Wire.beginTransmission(address);return Wire.endTransmission()==0;}
@@ -77,14 +80,18 @@ void readBattery(){
  // this does not prove a battery is attached or establish remaining runtime.
  hubVoltage=float(sum)/16.f*.002f;hubBattery=hub::batteryPercent(hubVoltage);
 }
-void printHelp(){Serial.println("Commands: summary, list, history, service, status, help. Startup screen lasts 8 s; no buttons required.");}
+// The boot "Hub MAC" line is usually lost: native USB re-enumerates after reset, so
+// the monitor reconnects too late. help/status/mac repeat it on demand.
+void printHelp(){Serial.printf("Hub MAC: %s\nCommands: summary, list, history, service, mac, motor, status, help. Button D3: short press = status screen, hold 1.5 s = MAC for 30 s.\n",hubMac[0]?hubMac:"unknown");}
 void serialCommands(uint32_t now){
  unsigned consumed=0;
  while(Serial.available()&&consumed++<48){char c=char(Serial.read());
   if(c=='\r'||c=='\n'){
    command[commandLength]=0;
    if(!std::strcmp(command,"summary"))model.select(hub::Screen::Summary,0,now);
-   else if(!std::strcmp(command,"status")){Serial.printf("HUB status radio=%u oled=%u rods=%u history=%u control_rx=%lu control_tx=%lu screen=%s\n",radioReady,oledReady,unsigned(model.rodCount()),unsigned(model.historyCount()),(unsigned long)controlReceived,(unsigned long)controlSent,model.power(now)==hub::Power::Off?"OFF":"ON");}
+   else if(!std::strcmp(command,"motor"))Serial.println(motor.start(1,now)?"HUB motor test: 300 ms pulse on D2":"HUB motor busy; try again");
+   else if(!std::strcmp(command,"mac")){Serial.printf("Hub MAC: %s\n",hubMac[0]?hubMac:"unknown");model.select(hub::Screen::Mac,0,now);}
+   else if(!std::strcmp(command,"status")){Serial.printf("HUB status mac=%s radio=%u oled=%u rods=%u history=%u control_rx=%lu control_tx=%lu screen=%s\n",hubMac[0]?hubMac:"unknown",radioReady,oledReady,unsigned(model.rodCount()),unsigned(model.historyCount()),(unsigned long)controlReceived,(unsigned long)controlSent,model.power(now)==hub::Power::Off?"OFF":"ON");}
    else if(!std::strcmp(command,"list")||!std::strncmp(command,"list ",5)){
     char* end=nullptr;unsigned long page=command[4]?std::strtoul(command+5,&end,10):1;
     if(page&&page<=std::max<size_t>(1,(model.rodCount()+2)/3)&&(!end||!*end))model.select(hub::Screen::List,page-1,now);else Serial.println("HUB error: invalid list page");
@@ -121,19 +128,24 @@ void updateOled(uint32_t now){
  lastFrame=frame;frameValid=true;
 }
 void setup(){
- pinMode(LedPin,OUTPUT);pinMode(MotorPin,OUTPUT);digitalWrite(MotorPin,LOW);
+ pinMode(LedPin,OUTPUT);pinMode(MotorPin,OUTPUT);digitalWrite(MotorPin,LOW);pinMode(ButtonPin,INPUT_PULLUP);
  pinMode(BatteryPin,INPUT);analogReadResolution(12);analogSetPinAttenuation(BatteryPin,ADC_11db);
  Serial.begin(115200);setCpuFrequencyMhz(80);
  uint32_t now=millis();model.begin(now);
  // Receiver starts before any OLED operation; missing OLED cannot gate reception.
  beginRadio(now);
  Wire.begin(D4,D5);Wire.setClock(400000);Wire.setTimeOut(10);
- readBattery();lastBatteryAt=now;printHelp();
+ readBattery();lastBatteryAt=now;button.begin(digitalRead(ButtonPin)==LOW,millis());printHelp();
 }
 void loop(){
  uint32_t now=millis();
  bool motorOn=motor.tick(now);digitalWrite(MotorPin,motorOn?HIGH:LOW);
  model.tick(now);
+ switch(button.update(digitalRead(ButtonPin)==LOW,now)){
+  case hub::ButtonEvent::LongPress:Serial.printf("HUB button: MAC %s shown for 30 s\n",hubMac[0]?hubMac:"unknown");model.select(hub::Screen::Mac,0,now);break;
+  case hub::ButtonEvent::ShortPress:if(model.manual())model.close(now);else model.select(hub::Screen::Summary,0,now);break;
+  default:break;
+ }
  // Drain a bounded burst and choose one highest-priority motor request.
  uint8_t motorRequest=0;bool batteryRequested=false;
  for(size_t i=0;i<hub::RxDepth;++i){Incoming incoming;if(!popEvent(incoming))break;

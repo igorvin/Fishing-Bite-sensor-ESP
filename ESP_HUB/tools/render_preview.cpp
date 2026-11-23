@@ -20,5 +20,6 @@ int main(int argc,char** argv){if(argc!=2)return 1;std::string path=argv[1];Mode
  Model alert;alert.begin(0);alert.ingest(fixture(1,1,100,"КАРП"),100);alert.ingest(fixture(2,1,200,"ФИДЕР"),200);alert.tick(3600);save(path,"bite",alert,3700,78);
  Model low;low.begin(0);low.ingest(fixture(1,3,100,"ПРИЧАЛ-ЛЕВЫЙ",10),100);save(path,"low-long-name",low,200,-1);
  Diagnostics d;d.radio=true;std::strcpy(d.mac,"02:00:00:00:00:01");d.rx=128;d.invalid=2;d.dropped=3;m.select(Screen::Service,0,23000);save(path,"service",m,23000,78,d);
+ m.select(Screen::Mac,0,24000);save(path,"mac",m,24000,78,d);
  return 0;
 }

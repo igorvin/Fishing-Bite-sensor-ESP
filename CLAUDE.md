@@ -6,7 +6,7 @@ Guidance for coding agents working in this repository. Read `.autopilot/PROGRESS
 
 This is a two-device ESP-NOW fishing-rod motion sensor system. The current software release is a **bench candidate**, not a field-validated bite detector. The existing sensor bench uses Seeed XIAO ESP32-C3 + LSM6DS3; the planned sensor board is Seeed XIAO ESP32-S3. The hub uses a SH1106 OLED.
 
-The detector baseline is `1b8c6b6`; current HU02 two-role firmware is `9916cf0`. Independent clean-clone checks passed 29 sensor tests, 36 hub tests (ASan/UBSan), four C3/S3 builds and eight actual-renderer frames. Both identified physical XIAO C3 roles were flashed with verified data and no backups as authorized. Startup radio registration and healthy sensor IMU/DISARMED status were observed. Field bite accuracy, actual motor vibration, RF range, battery charging and 48-hour endurance remain unvalidated. Deep-sleep work of 2026-11-22 (not yet committed): 37 sensor host tests, C3/S3/C6/`bite_v4_s3` builds, bench C3 sensor flashed and button sleep/wake/idle-sleep checked over USB.
+The detector baseline is `1b8c6b6`; current HU02 two-role firmware is `9916cf0`. Independent clean-clone checks passed 29 sensor tests, 36 hub tests (ASan/UBSan), four C3/S3 builds and eight actual-renderer frames. Both identified physical XIAO C3 roles were flashed with verified data and no backups as authorized. Startup radio registration and healthy sensor IMU/DISARMED status were observed. Field bite accuracy, actual motor vibration, RF range, battery charging and 48-hour endurance remain unvalidated. Deep-sleep work of 2026-11-22 (not yet committed): 37 sensor host tests, C3/S3/C6/`bite_v4_s3` builds, bench C3 sensor flashed and button sleep/wake/idle-sleep checked over USB. 2026-11-23 (armed heartbeat, ARM-cancel diagnostics, hub D3 button/MAC screen): 42 sensor and 38 hub host tests; not yet tried on hardware.
 
 ## Commands
 
@@ -56,6 +56,8 @@ pio run -d ESP_HUB -e xiao_esp32c3 -e seeed_xiao_esp32s3
 - `include/ConfigDatabase.h`: guards automatic, explicit, and destructor writes after an existing database fails to load.
 - `include/BoardProfile.h`: bench and PCB v4 (`BITE_BOARD_V4`) pin profiles and wake eligibility.
 - `include/PowerButton.h`: single-button ARM/sleep gesture, wake confirmation, low-battery guard (host-tested).
+- `include/Feedback.h`: armed red heartbeat, error cue, `ArmAssist` (button ARM deferred until release + 1 s when uncalibrated; bounded retry of a rejected boot calibration).
+- `include/EventLog.h`: 32-entry RAM journal printed live on USB (not during CSV) and by the `log` command.
 - `include/CsvBuffer.h`: bounded nonblocking CSV buffering.
 - `tests/` and `tools/`: production-core regressions, actual storage integration, and replay tools.
 - `docs/bench-testing.md`: wiring, calibration, configuration, capture, upload instructions, and physical checks.
@@ -64,6 +66,7 @@ pio run -d ESP_HUB -e xiao_esp32c3 -e seeed_xiao_esp32s3
 
 - The IMU is LSM6DS3, configured for ±2 g and 104 Hz. The unused gyroscope is off. Actual I²C status, read length, and Data Ready are checked; Adafruit `getEvent()` alone does not establish a successful read.
 - Boot requires a fresh two-second quiet calibration and starts DISARMED. ARM settles for 1.5 seconds. There is **no Smart Learn 10+10-second sequence**.
+- A finger on the board (RESET, wake press, ARM press) rejects that calibration, and the core then silently drops a pending ARM. This was the 2026-11-23 "button cannot ARM, web can" report (reproduced in `button-arm-uncalibrated-reproduction`). Firmware now defers an uncalibrated button ARM until release + 1 s, retries a rejected boot calibration up to 3 times (never arms), and signals a cancelled ARM with 3 beeps/red flashes. Keep calibration limits unchanged. While ARMED the red LED flashes 50 ms every second.
 - Dynamic measures `norm(accel - gravityEstimate)`; Legacy measures the change in acceleration magnitude. New `dynamicThresholdG` and noise settings are distinct from legacy `deltaG`; do not reinterpret or erase old configuration silently.
 - Motion suppression returns through SETTLING to ARMED in a stable **new** position. Manual DISARMED and an IMU FAULT never silently auto-arm. Recovery from an IMU fault requires calibration and an explicit ARM.
 - First-frame wait is bounded to 150 ms; reinitialization retries are spaced by 2000 ms. Time calculations must remain safe across uint32 rollover.
@@ -77,7 +80,7 @@ pio run -d ESP_HUB -e xiao_esp32c3 -e seeed_xiao_esp32s3
 
 Sensor PlatformIO and direct libraries are pinned in `platformio.ini`: official Espressif32 8.0.0 / Arduino-ESP32 3.3.12. Do not restore floating `stable` URLs or mix platform providers in one cache. Direct versions are pinned; this is not a complete transitive lockfile.
 
-Hub traps: preserve D4/D5 OLED, D1 LED, D2 motor and A0 divider pins. Receiver channel 1 was verified for startup exchange on the physical C3 pair. Radio stays awake; no ongoing heartbeat, alarm ACK or remote ARM telemetry. The 8-sender registry and 12-episode history are RAM-only. Counts mean known senders since boot, not currently reachable sensors; numbering resets on reboot.
+Hub traps: preserve D4/D5 OLED, D1 LED, D2 motor, D3 button (active LOW, added 2026-11-23: hold 1.5 s = MAC screen 30 s, short = status/close) and A0 divider pins. Motor wiring and the hub PCB plan: `docs/hub-hardware.md`. Receiver channel 1 was verified for startup exchange on the physical C3 pair. Radio stays awake; no ongoing heartbeat, alarm ACK or remote ARM telemetry. The 8-sender registry and 12-episode history are RAM-only. Counts mean known senders since boot, not currently reachable sensors; numbering resets on reboot.
 
 OLED retries must destroy the previous driver before initialization and destroy partially failed candidates; retain production `DriverSession` ownership. Do not reintroduce idle screen rotation, probes or ADC polling while a healthy OLED is off. USB status confirmed startup ON then OFF; physical motor and OLED disconnect/reconnect recovery still need acceptance.
 
