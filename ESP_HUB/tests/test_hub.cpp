@@ -90,9 +90,9 @@ int main(){
  TEST("bounded-journal-overwrites-oldest",{
   Model m;m.begin(0);for(int i=0;i<15;++i)m.ingest(event(1,1,uint32_t(10+i*10)),uint32_t(10+i*10));CHECK(m.historyCount()==12&&m.historyOverwrites==3);CHECK(m.history(0).at==150&&m.history(11).at==40);
  });
- TEST("minimal-boot-screen-off-without-auto-wake",{ Model m;m.begin(0);CHECK(m.power(7999)==Power::On);CHECK(m.power(8000)==Power::Off); });
+ TEST("minimal-boot-screen-off-without-auto-wake",{ Model m;m.begin(0);CHECK(m.power(19999)==Power::On);CHECK(m.power(20000)==Power::Off); });
  TEST("power-off-not-reset-by-auto-pages",{
-  Model m;m.begin(100);CHECK(m.power(8099)==Power::On);CHECK(m.power(8100)==Power::Off);for(uint32_t t=100;t<=120100;t+=1000){m.tick(t);m.view(t);}CHECK(m.power(120100)==Power::Off);m.ingest(event(1,1,120101),120101);CHECK(m.power(120101)==Power::On);
+  Model m;m.begin(100);CHECK(m.power(20099)==Power::On);CHECK(m.power(20100)==Power::Off);for(uint32_t t=100;t<=120100;t+=1000){m.tick(t);m.view(t);}CHECK(m.power(120100)==Power::Off);m.ingest(event(1,1,120101),120101);CHECK(m.power(120101)==Power::On);
  });
  TEST("rollover-alert-and-power",{
   Model m;uint32_t start=0xfffffff0u;m.begin(start);m.ingest(event(1,1,start),start);m.tick(start+3500u);CHECK(!m.alert().valid);CHECK(m.power(start+120000u)==Power::Off);
@@ -127,7 +127,7 @@ int main(){
  TEST("continuations-do-not-rewake-expired-alert",{ Model m;m.begin(0);m.ingest(event(1,1,100),100);for(uint32_t t=300;t<8000;t+=200){m.tick(t);auto r=m.ingest(event(1,2,t),t);CHECK(!r.newEpisode);if(t>=3700)CHECK(m.power(t)==Power::Off);} });
  TEST("registration-does-not-create-motion-or-wake",{
   Model m;m.begin(0);uint8_t mac[6]={2,0,0,0,0,1};char name[16]="Rod";
-  CHECK(m.registerRod(mac,name,false,0,9000)==0);CHECK(m.rodCount()==1&&m.historyCount()==0&&!m.alert().valid);CHECK(m.power(9000)==Power::Off);CHECK(!m.rod(0).batteryKnown);
+  CHECK(m.registerRod(mac,name,false,0,21000)==0);CHECK(m.rodCount()==1&&m.historyCount()==0&&!m.alert().valid);CHECK(m.power(21000)==Power::Off);CHECK(!m.rod(0).batteryKnown);
   CHECK(m.registerRod(mac,name,true,70,10000)==0);CHECK(m.rodCount()==1&&m.rod(0).battery==70);
  });
  TEST("startup-control-strict-wire-validation",{
@@ -184,7 +184,7 @@ int main(){
   Button wrap;uint32_t t=0xffffff00u;wrap.begin(false,t);wrap.update(true,t);wrap.update(true,t+50);CHECK(wrap.update(true,t+1549)==ButtonEvent::None&&wrap.update(true,t+1550)==ButtonEvent::LongPress);
  });
  TEST("mac-screen-30s-alert-priority-and-close",{
-  Model m;m.begin(0);for(uint32_t t=0;t<=9000;t+=1000)m.tick(t);CHECK(m.power(9000)==Power::Off);
+  Model m;m.begin(0);for(uint32_t t=0;t<=9000;t+=1000)m.tick(t);CHECK(m.power(9000)==Power::On);m.tick(21000);CHECK(m.power(21000)==Power::Off);
   m.select(Screen::Mac,0,10000);CHECK(m.view(10000).screen==Screen::Mac&&m.power(10000)==Power::On&&m.manual());
   m.ingest(event(1,1,12000),12000);CHECK(m.view(12000).screen==Screen::Alert);
   m.tick(15600);CHECK(m.view(15600).screen==Screen::Mac);

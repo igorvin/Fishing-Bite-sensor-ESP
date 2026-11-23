@@ -2,12 +2,12 @@
 #include <cstdint>
 #include "SensorCore.h"
 namespace bite {
-// Visible "armed" heartbeat: a short red flash every 5 seconds (user choice; 1 s was too
-// busy), phase-locked to the moment ARMED was entered (first flash immediately).
-// Alarm pulses override it.
+// "Awake" heartbeat: a short red flash every 5 seconds in every state except deep sleep
+// (user choice: 1 s was too busy, and it must also show while disarmed). Phase-locked to
+// `since` (boot), first flash immediately. Alarm pulses and the error cue override it.
 struct Heartbeat {
     static constexpr uint32_t periodMs=5000,onMs=50;
-    static bool on(uint32_t now,uint32_t armedSince){return elapsed(now,armedSince)%periodMs<onMs;}
+    static bool on(uint32_t now,uint32_t since){return elapsed(now,since)%periodMs<onMs;}
 };
 
 // Nonblocking repeated cue, e.g. three short beeps when an ARM request is cancelled.

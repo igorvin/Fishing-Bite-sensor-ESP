@@ -44,6 +44,7 @@ bite::Pattern errorCue;
 bite::ArmAssist armAssist;
 bite::EventLog<32> journal;
 bite::State loggedState=bite::State::Fault;
+uint32_t heartbeatSince=0;
 bite::CsvBuffer<2048> csvBuffer;
 bite::Calibration previousCalibration=bite::Calibration::None;
 bite::StateClock apClock,disarmedClock;
@@ -86,8 +87,9 @@ void stopOutputs(){alarmPulse.stop();beep.stop();errorCue.stop();}
 void applyOutputs(uint32_t now){
     bool alarmOn=alarmPulse.tick(now),beepOn=beep.tick(now),cueOn=errorCue.tick(now);
     bool armed=sensor.state()==bite::State::Armed;
-    // Red: alarm pulses and error cue; otherwise a short heartbeat flash every 5 s while ARMED.
-    bool redOn=alarmOn||cueOn||(armed&&bite::Heartbeat::on(now,sensor.stateSince()));
+    // Red: alarm pulses and error cue; otherwise a short "awake" flash every 5 s in any state.
+    // Deep sleep switches every output off (enterSleep), so the flashing stops only there.
+    bool redOn=alarmOn||cueOn||bite::Heartbeat::on(now,heartbeatSince);
     if(!pwmOK)return;
     // Passive buzzer: 100% volume maps to 50% carrier duty, never DC.
     ledcWriteChannel(0,(alarmOn||beepOn||cueOn)?(uint32_t(volume)*512u/100u):0);
@@ -395,6 +397,7 @@ void setup(){
     sett.begin();sett.onBuild(build);sett.onUpdate(update);
     updateBattery();lastBattery=lastRate=now;button.begin(digitalRead(board::button)==LOW,millis());
     if(buttonWake)beep.start(millis(),150);
+    heartbeatSince=millis();
     note(millis(),bite::Log::Boot,uint8_t(buttonWake?bite::Wake::Button:cause==ESP_SLEEP_WAKEUP_UNDEFINED?bite::Wake::Reset:bite::Wake::Other));
     // Before the first IMU frame the core reports FAULT; start the journal from DISARMED.
     loggedState=bite::State::Disarmed;
