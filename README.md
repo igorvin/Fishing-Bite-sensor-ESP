@@ -34,7 +34,7 @@
 - 🎯 **Sensitive detection.** The LSM6DS3 accelerometer is read 104 times per second. The *Dynamic XYZ* algorithm removes gravity and reacts to a jolt in any direction, including across the rod.
 - 🔇 **Noise protection.** At start-up the sensor measures background vibration for 2 seconds and raises its threshold automatically in a noisy setting (wind, rod rest).
 - 🎣 **Pause while handling the rod.** When you pick up or tilt the rod, alarms pause. Once the rod is still again in its **new** position, the sensor re-arms by itself.
-- 🔔 **Local signals.** While armed the green LED is on and the red LED gives a short flash every second, so you can see the sensor is working. A bite is red LED plus buzzer. Volume and brightness are adjustable.
+- 🔔 **Local signals.** While armed the green LED is on and the red LED gives a short flash every 5 seconds, so you can see the sensor is working. A bite is red LED plus buzzer. Volume and brightness are adjustable.
 - 📡 **ESP-NOW radio to the hub.** Three events: first bite, continuing bite, low battery.
 - 📱 **Phone setup.** The sensor runs its own Wi-Fi access point with a page at `http://192.168.4.1`, in English or Russian.
 - 🔘 **One button** for arming, disarming, deep sleep and wake.
@@ -145,7 +145,7 @@ Choosing and wiring the vibration motor, with the parts list: [docs/hub-hardware
 
 The sensor sends events only to the hub whose MAC address you give it.
 
-1. **Find the hub's MAC.** Hold the hub button for 1.5 seconds: the MAC appears on the screen in large digits for 30 seconds. Without the button: open the hub's serial monitor and type `mac`.
+1. **Find the hub's MAC.** It is on the bottom line of the start-up screen for 8 seconds after the hub is switched on. Holding the hub button for 1.5 seconds shows it in large digits for 30 seconds. Over USB: type `mac` in the hub's serial monitor.
 
    ```bash
    pio device monitor -d ESP_HUB --port <PORT> --baud 115200
@@ -237,7 +237,7 @@ The **Page** menu at the top has three sections: *Status*, *Sensor* and *Setting
 
 1. **Power on or wake the sensor.** Hold the button for about 1 second until it beeps. The sensor measures the background straight away, so **keep it still for 2 seconds**.
 2. **Mount the sensor on the rod** and put the rod on its rest.
-3. **Arm.** Hold the button for 1–3 seconds: a short beep sounds at 1 second, then release; a confirmation beep follows. The sensor waits 1.5 seconds for the rod to settle (*SETTLING*), then the **green LED** turns on and the red LED starts a short flash every second: armed. If the sensor has not been calibrated yet, it starts calibrating 1 second after you release the button (do not touch it for 2 seconds).
+3. **Arm.** Hold the button for 1–3 seconds: a short beep sounds at 1 second, then release; a confirmation beep follows. The sensor waits 1.5 seconds for the rod to settle (*SETTLING*), then the **green LED** turns on and the red LED starts a short flash every 5 seconds: armed. If the sensor has not been calibrated yet, it starts calibrating 1 second after you release the button (do not touch it for 2 seconds).
 4. **Bite:** red LED and buzzer on the sensor, screen and vibration on the hub. The signal repeats while the line keeps moving.
 5. **Picked up the rod?** No need to disarm: the sensor pauses alarms and re-arms by itself once the rod is still again, in its new position.
 6. **Disarm** with the same 1–3 second hold: the green LED goes out and you hear a short beep.
@@ -265,7 +265,7 @@ The **Page** menu at the top has three sections: *Status*, *Sensor* and *Setting
 | Situation | Green | Red | Buzzer | Hub |
 |---|---|---|---|---|
 | Disarmed | — | — | short beep when disarming | — |
-| Armed | on | short flash every second | beep when arming | — |
+| Armed | on | short flash every 5 s | beep when arming | — |
 | **ARM cancelled**: the sensor moved during calibration | — | 3 flashes | 3 short beeps | — |
 | Bite (event 1) | on | flash | short signal | screen + 300 ms vibration |
 | Continuing bite (event 2) | on | repeated flashes | repeated signals | 800 ms vibration at the start of the episode |
@@ -299,7 +299,7 @@ An accelerometer fault or a manual disarm **never** re-arms the sensor by itself
 
 ## Hub
 
-After power-on the hub shows for about 8 seconds how many sensors it has seen and its own battery, then the screen turns off. A new bite or battery warning turns on the screen and the motor.
+After power-on the hub shows for about 8 seconds how many sensors it has seen, its own battery and, on the bottom line, **its MAC address** for pairing; then the screen turns off. A new bite or battery warning turns on the screen and the motor.
 
 <table>
 <tr>

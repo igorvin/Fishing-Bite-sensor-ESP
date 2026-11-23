@@ -86,7 +86,7 @@ void stopOutputs(){alarmPulse.stop();beep.stop();errorCue.stop();}
 void applyOutputs(uint32_t now){
     bool alarmOn=alarmPulse.tick(now),beepOn=beep.tick(now),cueOn=errorCue.tick(now);
     bool armed=sensor.state()==bite::State::Armed;
-    // Red: alarm pulses and error cue; otherwise a short heartbeat flash every second while ARMED.
+    // Red: alarm pulses and error cue; otherwise a short heartbeat flash every 5 s while ARMED.
     bool redOn=alarmOn||cueOn||(armed&&bite::Heartbeat::on(now,sensor.stateSince()));
     if(!pwmOK)return;
     // Passive buzzer: 100% volume maps to 50% carrier duty, never DC.

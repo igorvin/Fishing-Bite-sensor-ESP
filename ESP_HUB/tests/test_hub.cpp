@@ -164,6 +164,14 @@ int main(){
   uint8_t mac[6]={2,0,0,0,0,1};startup::Sensor s;s.begin(mac,20);uint32_t t=0xffffff00u;s.announce(t,"Rod",false,0);CHECK(!s.due(t+699)&&s.due(t+700));
   CHECK(!startup::batteryKnown(.6f)&&!startup::batteryKnown(5.f)&&startup::batteryKnown(3.7f));char name[16];startup::copyName(name,"АБВГДЕЁЖЗ");CHECK(startup::nameValid(name));
  });
+ TEST("startup-screen-shows-mac",{
+  Model m;m.begin(0);Diagnostics a;a.radio=true;std::strcpy(a.mac,"AA:BB:CC:DD:EE:FF");Diagnostics b=a;std::strcpy(b.mac,"AA:BB:CC:DD:EE:00");
+  CHECK(m.view(0).screen==Screen::Summary&&m.power(0)==Power::On);
+  Frame fa=render(m,0,-1,a),fb=render(m,0,-1,b);bool bottomDiffers=false,topSame=true;
+  for(int y=0;y<64;++y)for(int x=0;x<128;++x){bool diff=fa.pixel(x,y)!=fb.pixel(x,y);if(diff&&y>=57)bottomDiffers=true;if(diff&&y<57)topSame=false;}
+  CHECK(bottomDiffers&&topSame);
+  Diagnostics none;none.radio=true;CHECK(render(m,0,-1,none).bytes!=fa.bytes);
+ });
  TEST("button-short-long-debounce",{
   Button b;b.begin(false,0);
   CHECK(b.update(true,10)==ButtonEvent::None&&b.update(false,30)==ButtonEvent::None&&b.update(false,200)==ButtonEvent::None);// 20 ms bounce ignored

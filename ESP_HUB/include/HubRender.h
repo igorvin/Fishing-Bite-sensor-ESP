@@ -84,9 +84,11 @@ inline Frame render(const Model& model,uint32_t now,int hubBattery,const Diagnos
   if(std::strlen(d.mac)==17){char half[9]{};std::memcpy(half,d.mac,8);f.text(half,16,32,120,2);std::memcpy(half,d.mac+9,8);f.text(half,16,48,120,2);}
   else f.text("НЕИЗВЕСТЕН",2,40,124,2);
  }else if(v.screen==Screen::Summary){
-  f.text(d.radio?"ГОТОВ К ПРИЁМУ":"РАДИО: ОШИБКА",2,23,124);
-  std::snprintf(buf,sizeof(buf),"УДИЛИЩ: %u",unsigned(model.rodCount()));f.text(buf,4,39,120,2);
-  f.text("УЧТЕНО С ЗАПУСКА",2,57,124);
+  // The startup screen carries the hub MAC so a sensor can be paired without USB.
+  f.text(d.radio?"ГОТОВ К ПРИЁМУ":"РАДИО: ОШИБКА",2,21,124);
+  std::snprintf(buf,sizeof(buf),"УДИЛИЩ: %u",unsigned(model.rodCount()));f.text(buf,4,31,120,2);
+  f.text("УЧТЕНО С ЗАПУСКА",2,47,124);
+  f.text(std::strlen(d.mac)==17?d.mac:"MAC НЕИЗВЕСТЕН",2,57,124);
  }else if(v.screen==Screen::List){
   const size_t pages=std::max<size_t>(1,(model.rodCount()+2)/3),page=v.page%pages;
   std::snprintf(buf,sizeof(buf),"УДИЛИЩА %u/%u",unsigned(page+1),unsigned(pages));f.text(buf,2,21,124);

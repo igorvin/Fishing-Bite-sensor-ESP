@@ -126,8 +126,8 @@ std::vector<std::pair<const char*,std::function<void()>>> tests={
   a.rejected(13000);require(!a.retryDue(20000,true,true),"bounded: at most three");
   a.calibrated();a.rejected(UINT32_MAX-500);require(!a.retryDue(1000,true,true)&&a.retryDue(1500,true,true),"success resets the budget; rollover safe");}},
 {"armed-heartbeat-and-error-cue",[]{
-  require(Heartbeat::on(5000,5000)&&Heartbeat::on(5049,5000)&&!Heartbeat::on(5050,5000)&&!Heartbeat::on(5999,5000)&&Heartbeat::on(6000,5000),"50 ms flash once per second from entering ARMED");
-  uint32_t since=UINT32_MAX-20;require(Heartbeat::on(since,since)&&!Heartbeat::on(since+100,since)&&Heartbeat::on(since+1000,since),"phase survives millis rollover");
+  require(Heartbeat::on(5000,5000)&&Heartbeat::on(5049,5000)&&!Heartbeat::on(5050,5000)&&!Heartbeat::on(6000,5000)&&!Heartbeat::on(9999,5000)&&Heartbeat::on(10000,5000),"50 ms flash every 5 s from entering ARMED");
+  uint32_t since=UINT32_MAX-20;require(Heartbeat::on(since,since)&&!Heartbeat::on(since+100,since)&&!Heartbeat::on(since+1000,since)&&Heartbeat::on(since+5000,since),"phase survives millis rollover");
   Pattern p;p.start(100,3,80,80);int on=0,edges=0;bool last=false;
   for(uint32_t t=100;t<700;++t){bool x=p.tick(t);on+=x;edges+=x&&!last;last=x;}
   require(on==240&&edges==3&&!p.active(),"three 80 ms beeps, then finished");}},

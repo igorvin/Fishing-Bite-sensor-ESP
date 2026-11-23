@@ -2,10 +2,11 @@
 #include <cstdint>
 #include "SensorCore.h"
 namespace bite {
-// Visible "armed" heartbeat: a short red flash once per second, phase-locked to
-// the moment ARMED was entered (first flash immediately). Alarm pulses override it.
+// Visible "armed" heartbeat: a short red flash every 5 seconds (user choice; 1 s was too
+// busy), phase-locked to the moment ARMED was entered (first flash immediately).
+// Alarm pulses override it.
 struct Heartbeat {
-    static constexpr uint32_t periodMs=1000,onMs=50;
+    static constexpr uint32_t periodMs=5000,onMs=50;
     static bool on(uint32_t now,uint32_t armedSince){return elapsed(now,armedSince)%periodMs<onMs;}
 };
 

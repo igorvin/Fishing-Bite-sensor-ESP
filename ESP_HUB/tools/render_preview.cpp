@@ -12,7 +12,7 @@ void save(const std::string& folder,const char* name,const Model& m,uint32_t now
  // PBM 1 means black; our framebuffer1 means illuminated OLED pixel.
  for(uint8_t b:f.bytes)std::fputc(uint8_t(~b),file);std::fclose(file);
 }
-int main(int argc,char** argv){if(argc!=2)return 1;std::string path=argv[1];Model empty;empty.begin(0);Diagnostics ready;ready.radio=true;save(path,"empty",empty,0,-1,ready);save(path,"radio-error",empty,0,-1);
+int main(int argc,char** argv){if(argc!=2)return 1;std::string path=argv[1];Model empty;empty.begin(0);Diagnostics ready;ready.radio=true;std::strcpy(ready.mac,"02:00:00:00:00:01");save(path,"empty",empty,0,-1,ready);save(path,"radio-error",empty,0,-1);
  Model m;m.begin(0);m.ingest(fixture(1,1,100,"КАРП"),100);m.ingest(fixture(2,1,200,"ФИДЕР"),200);m.ingest(fixture(3,1,300,"ДАЛЬНИЙ"),300);m.ingest(fixture(4,1,400,"FLOATER"),400);
  for(uint32_t t=4000;t<=20000;t+=4000)m.tick(t);
  m.select(Screen::List,0,21000);save(path,"rods",m,21000,78);m.select(Screen::List,1,21000);save(path,"rods-page2",m,21000,78);
