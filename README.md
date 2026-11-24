@@ -85,6 +85,21 @@
 
 The button must be on **D1**: the board cannot wake from deep sleep on D6. D0 and D6 are unused by the current firmware.
 
+### Sensor — Waveshare ESP32-S3-Zero (environment `s3_zero`)
+
+This board labels its pins by GPIO number (GP1…GP13), not D0…D10, so the wiring is given in GPIO numbers:
+
+| Signal | GPIO | Notes |
+|---|---|---|
+| LSM6DS3 SDA / SCL | GP4 / GP5 | Module powered from 3.3 V |
+| Button (to GND) | GP6 | Wakes from deep sleep; internal pull-up |
+| Battery (100k/100k divider) | GP7 | |
+| Green LED | GP8 | |
+| Red LED | GP9 | |
+| Passive buzzer (through a transistor) | GP10 | 3 kHz PWM |
+
+Do not use GP0 (BOOT button), GP3 (affects boot), GP21 (on-board RGB LED), GP19/GP20 (USB) or TX/RX (GP43/GP44). **The ESP32-S3-Zero has no battery charger or BAT pads:** connect a Li-ion cell through a separate charge/protection module to the 5V pin and take the divider from the cell. Check against Waveshare's schematic for your board revision: the pinout above is verified by building the firmware only, not on the board itself.
+
 ### Sensor — PCB v4 (XIAO ESP32-S3, environment `bite_v4_s3`)
 
 Button D1 (external 10k pull-up), battery D0, red LED D8, green LED D9, buzzer D10, LSM6DS3 on D4/D5.
@@ -126,6 +141,7 @@ Choosing and wiring the vibration motor, with the parts list: [docs/hub-hardware
    | XIAO ESP32-C3 (bench) | `xiao_esp32c3` |
    | XIAO ESP32-S3 (bench) | `seeed_xiao_esp32s3` |
    | PCB v4 (XIAO ESP32-S3) | `bite_v4_s3` |
+   | Waveshare ESP32-S3-Zero | `s3_zero` |
 
    ```bash
    pio run -e xiao_esp32c3 -t upload --upload-port <PORT>
@@ -354,7 +370,7 @@ python3 ESP_HUB/tools/run_host_tests.py
 ```
 
 ```bash
-pio run -e xiao_esp32c3 -e seeed_xiao_esp32s3 -e bite_v4_s3
+pio run -e xiao_esp32c3 -e seeed_xiao_esp32s3 -e bite_v4_s3 -e s3_zero
 ```
 
 ```bash

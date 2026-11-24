@@ -21,6 +21,7 @@ pio run -e xiao_esp32c3
 pio run -e seeed_xiao_esp32s3
 pio run -e xiao_esp32c6
 pio run -e bite_v4_s3      # PCB v4 pin profile
+pio run -e s3_zero         # Waveshare ESP32-S3-Zero (BITE_BOARD_S3_ZERO, raw GPIO numbers)
 
 # Storage integration needs the actual library installed by the C3 build
 python3 tests/test_storage_integration.py
@@ -54,7 +55,7 @@ pio run -d ESP_HUB -e xiao_esp32c3 -e seeed_xiao_esp32s3
 - `include/ImuDriver.h`, `include/ImuRead.h`: LSM6DS3 initialization and checked, fresh XYZ burst reads.
 - `include/ImuSession.h`: first-frame timeout and bounded reinitialization lifecycle.
 - `include/ConfigDatabase.h`: guards automatic, explicit, and destructor writes after an existing database fails to load.
-- `include/BoardProfile.h`: bench and PCB v4 (`BITE_BOARD_V4`) pin profiles and wake eligibility.
+- `include/BoardProfile.h`: bench, PCB v4 (`BITE_BOARD_V4`) and Waveshare ESP32-S3-Zero (`BITE_BOARD_S3_ZERO`: SDA 4, SCL 5, button 6, VBAT 7, green 8, red 9, buzzer 10; raw GPIO because that variant's D-names differ from XIAO; GPIO0/3/19/20/21/43/44 avoided; no on-board charger) pin profiles and wake eligibility. The S3-Zero profile is build-verified only.
 - `include/PowerButton.h`: single-button ARM/sleep gesture, wake confirmation, low-battery guard (host-tested).
 - `include/Feedback.h`: armed red heartbeat, error cue, `ArmAssist` (button ARM deferred until release + 1 s when uncalibrated; bounded retry of a rejected boot calibration).
 - `include/EventLog.h`: 32-entry RAM journal printed live on USB (not during CSV) and by the `log` command.
