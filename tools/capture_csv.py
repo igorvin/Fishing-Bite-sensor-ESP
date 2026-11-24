@@ -33,12 +33,19 @@ out_dir = os.path.dirname(os.path.abspath(args.out))
 os.makedirs(out_dir, exist_ok=True)
 marks_path = os.path.splitext(args.out)[0] + '.marks.csv'
 
-# Keep DTR/RTS released so opening the port does not reset the board.
+# The ESP32 USB serial resets the chip when RTS is asserted while DTR is released.
+# pyserial applies DTR before RTS on open, and the OS asserts both, so releasing DTR
+# first (the 2026-11-24 recordings) produced exactly that state and rebooted the
+# sensor. Keep DTR asserted while RTS is released, then release DTR.
 port = serial.Serial()
 port.port, port.baudrate, port.timeout = args.port, args.baud, 0.05
-port.dtr = False
+port.dtr = True
 port.rts = False
 port.open()
+try:
+    port.dtr = False
+except OSError:
+    pass  # ports without modem lines (e.g. virtual) ignore DTR
 
 rows = 0
 marks = 0
@@ -56,7 +63,10 @@ with open(args.out, 'w', encoding='utf-8') as out, open(marks_path, 'w', encodin
     mark_file.write('mark,sensor_ms,row,wall_time\n')
     port.reset_input_buffer()
     port.write(b'csv on\n')
-    print(f'Recording {args.seconds:.0f} s to {args.out}. Press Enter to mark a simulated bite, Ctrl+C to stop early.')
+    print(f'Recording {args.seconds:.0f} s to {args.out}.')
+    print('>>> Press Enter in THIS window at each simulated bite (a "mark N" line confirms it). Ctrl+C stops early.')
+    if not interactive:
+        print('(stdin is not a terminal: marks are disabled)')
     started = time.monotonic()
     shown = started
     try:
