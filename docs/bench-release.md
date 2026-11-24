@@ -1,5 +1,7 @@
 # Sensor bench release — software scope and validation
 
+> **Historical document** for commit `1b8c6b6`. Since then: button moved to D1 with deep sleep and wake, steadiness-based calibration and arming that works in wind, red heartbeat, event journal (`log`), hub button and MAC screen. Current behaviour: [README](../README.md), [bench testing](bench-testing.md).
+
 The sensor software at commit `1b8c6b6ca829fa9100899844ca68a552fe0ec190` is ready for user-operated bench measurements. This is a software bench release; real bite detection, range and battery endurance have not been measured. See [bench testing](bench-testing.md) for wiring, web controls, flash precautions and the physical acceptance procedure.
 
 ## Released behavior
