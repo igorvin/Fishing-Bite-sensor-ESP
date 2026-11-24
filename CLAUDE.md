@@ -42,7 +42,7 @@ Hub checks from the repository root:
 ```sh
 python3 ESP_HUB/tools/run_host_tests.py
 python3 ESP_HUB/tools/render_preview.py
-pio run -d ESP_HUB -e xiao_esp32c3 -e seeed_xiao_esp32s3
+pio run -d ESP_HUB -e xiao_esp32c3 -e seeed_xiao_esp32s3 -e s3_zero
 ```
 
 ## Source pointers
@@ -86,7 +86,7 @@ pio run -d ESP_HUB -e xiao_esp32c3 -e seeed_xiao_esp32s3
 
 Sensor PlatformIO and direct libraries are pinned in `platformio.ini`: official Espressif32 8.0.0 / Arduino-ESP32 3.3.12. Do not restore floating `stable` URLs or mix platform providers in one cache. Direct versions are pinned; this is not a complete transitive lockfile.
 
-Hub traps: preserve D4/D5 OLED, D1 LED, D2 motor, D3 button (active LOW, added 2026-11-23: hold 1.5 s = MAC screen 30 s, short = status/close) and A0 divider pins. Motor wiring and the hub PCB plan: `docs/hub-hardware.md`. Receiver channel 1 was verified for startup exchange on the physical C3 pair. Radio stays awake; no ongoing heartbeat, alarm ACK or remote ARM telemetry. The 8-sender registry and 12-episode history are RAM-only. Counts mean known senders since boot, not currently reachable sensors; numbering resets on reboot.
+Hub traps: preserve D4/D5 OLED, D1 LED, D2 motor, D3 button (active LOW, added 2026-11-23: hold 1.5 s = MAC screen 30 s, short = status/close) and A0 divider pins. Hub env `s3_zero` (`HUB_BOARD_S3_ZERO`, build-verified only) uses GPIO4/5 OLED, 8 LED, 9 motor, 6 button, 7 divider. Motor wiring and the hub PCB plan: `docs/hub-hardware.md`. Receiver channel 1 was verified for startup exchange on the physical C3 pair. Radio stays awake; no ongoing heartbeat, alarm ACK or remote ARM telemetry. The 8-sender registry and 12-episode history are RAM-only. Counts mean known senders since boot, not currently reachable sensors; numbering resets on reboot.
 
 OLED retries must destroy the previous driver before initialization and destroy partially failed candidates; retain production `DriverSession` ownership. Do not reintroduce idle screen rotation, probes or ADC polling while a healthy OLED is off. USB status confirmed startup ON then OFF; physical motor and OLED disconnect/reconnect recovery still need acceptance.
 

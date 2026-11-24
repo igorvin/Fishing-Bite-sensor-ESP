@@ -12,7 +12,17 @@
 
 // Existing hub wiring plus one button on D3 to GND (internal pull-up, added 2026-11-23):
 // short press = status screen / close a screen, hold 1.5 s = hub MAC for 30 s.
-constexpr int LedPin=D1,MotorPin=D2,BatteryPin=A0,ButtonPin=D3;
+#if defined(HUB_BOARD_S3_ZERO)
+// Waveshare ESP32-S3-Zero (env s3_zero), added 2026-11-24. Raw GPIO numbers: that board's
+// Arduino variant names D/A pins differently from XIAO. Same layout idea as the sensor's
+// S3-Zero profile (I2C 4/5, button 6, battery 7). GPIO0/3/19/20/21/43/44 stay free.
+// No on-board charger: battery through a charge/protection module, divider to GPIO7.
+constexpr int LedPin=8,MotorPin=9,BatteryPin=7,ButtonPin=6,SdaPin=4,SclPin=5;
+constexpr const char* PinNames="LED GPIO8, motor GPIO9, button GPIO6, battery GPIO7, OLED SDA/SCL GPIO4/5";
+#else
+constexpr int LedPin=D1,MotorPin=D2,BatteryPin=A0,ButtonPin=D3,SdaPin=D4,SclPin=D5;
+constexpr const char* PinNames="LED D1, motor D2, button D3, battery A0, OLED SDA/SCL D4/D5";
+#endif
 constexpr uint8_t RadioChannel=1; // Existing sensor softAP defaults to channel 1; verify on the physical pair.
 hub::DriverSession<Adafruit_SH1106G> oled;
 hub::Model model;
@@ -82,14 +92,14 @@ void readBattery(){
 }
 // The boot "Hub MAC" line is usually lost: native USB re-enumerates after reset, so
 // the monitor reconnects too late. help/status/mac repeat it on demand.
-void printHelp(){Serial.printf("Hub MAC: %s\nCommands: summary, list, history, service, mac, motor, status, help. Button D3: short press = status screen, hold 1.5 s = MAC for 30 s.\n",hubMac[0]?hubMac:"unknown");}
+void printHelp(){Serial.printf("Hub MAC: %s\nCommands: summary, list, history, service, mac, motor, status, help. Button: short press = status screen, hold 1.5 s = MAC for 30 s. Pins: %s.\n",hubMac[0]?hubMac:"unknown",PinNames);}
 void serialCommands(uint32_t now){
  unsigned consumed=0;
  while(Serial.available()&&consumed++<48){char c=char(Serial.read());
   if(c=='\r'||c=='\n'){
    command[commandLength]=0;
    if(!std::strcmp(command,"summary"))model.select(hub::Screen::Summary,0,now);
-   else if(!std::strcmp(command,"motor"))Serial.println(motor.start(1,now)?"HUB motor test: 300 ms pulse on D2":"HUB motor busy; try again");
+   else if(!std::strcmp(command,"motor"))Serial.println(motor.start(1,now)?"HUB motor test: 300 ms pulse on the motor pin":"HUB motor busy; try again");
    else if(!std::strcmp(command,"mac")){Serial.printf("Hub MAC: %s\n",hubMac[0]?hubMac:"unknown");model.select(hub::Screen::Mac,0,now);}
    else if(!std::strcmp(command,"status")){Serial.printf("HUB status mac=%s radio=%u oled=%u rods=%u history=%u control_rx=%lu control_tx=%lu screen=%s\n",hubMac[0]?hubMac:"unknown",radioReady,oledReady,unsigned(model.rodCount()),unsigned(model.historyCount()),(unsigned long)controlReceived,(unsigned long)controlSent,model.power(now)==hub::Power::Off?"OFF":"ON");}
    else if(!std::strcmp(command,"list")||!std::strncmp(command,"list ",5)){
@@ -134,7 +144,7 @@ void setup(){
  uint32_t now=millis();model.begin(now);
  // Receiver starts before any OLED operation; missing OLED cannot gate reception.
  beginRadio(now);
- Wire.begin(D4,D5);Wire.setClock(400000);Wire.setTimeOut(10);
+ Wire.begin(SdaPin,SclPin);Wire.setClock(400000);Wire.setTimeOut(10);
  readBattery();lastBatteryAt=now;button.begin(digitalRead(ButtonPin)==LOW,millis());printHelp();
 }
 void loop(){

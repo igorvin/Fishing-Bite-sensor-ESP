@@ -106,13 +106,13 @@ Button D1 (external 10k pull-up), battery D0, red LED D8, green LED D9, buzzer D
 
 ### Hub
 
-| Signal | XIAO pin |
-|---|---|
-| OLED SDA / SCL | D4 / D5 |
-| LED | D1 |
-| Motor MOSFET | D2 |
-| Button (to GND) | D3 |
-| Battery (100k/100k divider) | A0 |
+| Signal | XIAO pin | Waveshare ESP32-S3-Zero (`s3_zero`) |
+|---|---|---|
+| OLED SDA / SCL | D4 / D5 | GP4 / GP5 |
+| LED | D1 | GP8 |
+| Motor MOSFET | D2 | GP9 |
+| Button (to GND) | D3 | GP6 |
+| Battery (100k/100k divider) | A0 | GP7 |
 
 <p align="center"><img src="docs/images/hub-wiring.svg" width="820" alt="Hub wiring diagram"></p>
 
@@ -153,7 +153,7 @@ Choosing and wiring the vibration motor, with the parts list: [docs/hub-hardware
    pio run -d ESP_HUB -e xiao_esp32c3 -t upload --upload-port <PORT>
    ```
 
-   For a XIAO ESP32-S3 use `-e seeed_xiao_esp32s3`.
+   For a XIAO ESP32-S3 use `-e seeed_xiao_esp32s3`, for a Waveshare ESP32-S3-Zero `-e s3_zero`.
 
 > 💡 Mind the ports: hub firmware on the sensor (or the other way round) will not work. For an ordinary update **do not** run `erase_flash` or `uploadfs`; they wipe the saved settings.
 

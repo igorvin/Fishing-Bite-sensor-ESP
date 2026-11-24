@@ -106,13 +106,13 @@
 
 ### Хаб
 
-| Сигнал | Вывод XIAO |
-|---|---|
-| OLED SDA / SCL | D4 / D5 |
-| Светодиод | D1 |
-| MOSFET вибромотора | D2 |
-| Кнопка (к GND) | D3 |
-| Батарея (делитель 100k/100k) | A0 |
+| Сигнал | Вывод XIAO | Waveshare ESP32-S3-Zero (`s3_zero`) |
+|---|---|---|
+| OLED SDA / SCL | D4 / D5 | GP4 / GP5 |
+| Светодиод | D1 | GP8 |
+| MOSFET вибромотора | D2 | GP9 |
+| Кнопка (к GND) | D3 | GP6 |
+| Батарея (делитель 100k/100k) | A0 | GP7 |
 
 <p align="center"><img src="docs/images/hub-wiring.svg" width="820" alt="Схема подключения хаба"></p>
 
@@ -153,7 +153,7 @@
    pio run -d ESP_HUB -e xiao_esp32c3 -t upload --upload-port <PORT>
    ```
 
-   Для XIAO ESP32-S3 используйте `-e seeed_xiao_esp32s3`.
+   Для XIAO ESP32-S3 используйте `-e seeed_xiao_esp32s3`, для Waveshare ESP32-S3-Zero — `-e s3_zero`.
 
 > 💡 Будьте внимательны с портами: случайно залитая на датчик прошивка хаба (или наоборот) работать не будет. Для обычного обновления **не** выполняйте `erase_flash` и `uploadfs` — они стирают сохранённые настройки.
 
