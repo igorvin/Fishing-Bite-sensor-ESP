@@ -12,6 +12,8 @@ constexpr size_t MaxRods=8, HistorySize=12, RxDepth=24;
 // Sensor permits repeatMs=2000; fresh-sample scheduling can exceed that by
 // one sample. Allow bounded scheduling/transport jitter, not unlimited gaps.
 constexpr uint32_t AlertMs=3500, EpisodeGapMs=2500, PageMs=8000;
+// Startup screen (count, hub battery, hub MAC) stays lit this long; user chose 20 s so the MAC can be copied.
+constexpr uint32_t ScreenOnMs=20000;
 inline uint32_t elapsed(uint32_t now,uint32_t then){return now-then;}
 struct __attribute__((packed)) WirePacket {char rodName[16];uint8_t eventType,batteryPct;float deltaG;};
 static_assert(sizeof(WirePacket)==22,"Existing sensor wire format must remain 22 bytes");
@@ -52,7 +54,7 @@ template<typename T,size_t N> class Ring {
 struct Rod {bool used=false,batteryKnown=true;std::array<uint8_t,6> mac{};char name[17]{};uint8_t battery=0,type=0;float delta=0;uint32_t lastAt=0,motionAt=0,lowAt=0;bool motionSeen=false,lowSeen=false;uint32_t episode=0;};
 struct Entry {uint32_t episode=0;uint8_t rod=0,type=0,battery=0;uint32_t at=0,lastAt=0;float peak=0;};
 struct Alert {bool valid=false;uint8_t rod=0,type=0,battery=0;uint32_t at=0;};
-enum class Screen {Summary,List,History,Service,Alert};
+enum class Screen {Summary,List,History,Service,Alert,Mac};
 enum class Power {On,Dim,Off};
 struct View {Screen screen=Screen::Summary;size_t page=0;};
 struct Ingest {bool accepted=false,newEpisode=false,motor=false;uint8_t type=0;};
@@ -106,14 +108,17 @@ class Model {
   }
   return {true,fresh,fresh,e.type};
  }
- void tick(uint32_t now){if(current_.valid&&elapsed(now,shownAt_)>=AlertMs){current_={};next(now);if(!current_.valid)activity_=now-8000u;}if(manual_&&elapsed(now,manualAt_)>=30000){manual_=false;navAt_=now;}}
+ void tick(uint32_t now){if(current_.valid&&elapsed(now,shownAt_)>=AlertMs){current_={};next(now);if(!current_.valid)activity_=now-ScreenOnMs;}if(manual_&&elapsed(now,manualAt_)>=30000){manual_=false;navAt_=now;}}
  void select(Screen s,size_t page,uint32_t now){manual_=true;manualScreen_=s;manualPage_=page;manualAt_=activity_=now;}
+ // Button short press on a manual screen: back to standby (screen off) at once.
+ void close(uint32_t now){manual_=false;navAt_=now;activity_=now-ScreenOnMs;}
+ bool manual()const{return manual_;}
  View view(uint32_t)const{
   if(current_.valid)return {Screen::Alert,0};
   if(manual_)return {manualScreen_,manualPage_};
   return {Screen::Summary,0};
  }
- Power power(uint32_t now)const{if(current_.valid||manual_)return Power::On;return elapsed(now,activity_)<8000?Power::On:Power::Off;}
+ Power power(uint32_t now)const{if(current_.valid||manual_)return Power::On;return elapsed(now,activity_)<ScreenOnMs?Power::On:Power::Off;}
  size_t rodCount()const{return count_;}const Rod& rod(size_t id)const{return rods_[id];}
  size_t historyCount()const{return hcount_;}const Entry& history(size_t newest)const{return history_[(hhead_+HistorySize-1-newest)%HistorySize];}
  const Alert& alert()const{return current_;}uint32_t alertRemaining(uint32_t now)const{return !current_.valid?0:AlertMs-std::min(AlertMs,elapsed(now,shownAt_));}
@@ -129,6 +134,26 @@ class Motor {
  bool tick(uint32_t now){if(!pattern_)return false;uint32_t age=elapsed(now,at_),end=pattern_==2?800:pattern_==3?420:300;
   if(age>=end){pattern_=0;stoppedAt_=now;everStopped_=true;return false;}
   return pattern_!=3||age<150||age>=270;
+ }
+};
+// One active-LOW hub button. Short press (released before HoldMs): ShortPress.
+// Held for HoldMs: LongPress fires once while still held; its release is ignored.
+enum class ButtonEvent {None,ShortPress,LongPress};
+class Button {
+ bool raw_=false,stable_=false,longSent_=false;uint32_t changed_=0,pressedAt_=0;
+ public:
+ static constexpr uint32_t DebounceMs=50,HoldMs=1500;
+ // A button already held at power-up is ignored until released.
+ void begin(bool pressed,uint32_t now){raw_=stable_=pressed;longSent_=pressed;changed_=pressedAt_=now;}
+ ButtonEvent update(bool pressed,uint32_t now){
+  if(pressed!=raw_){raw_=pressed;changed_=now;}
+  if(raw_!=stable_&&elapsed(now,changed_)>=DebounceMs){
+   stable_=raw_;
+   if(stable_){pressedAt_=now;longSent_=false;return ButtonEvent::None;}
+   bool wasLong=longSent_;longSent_=false;return wasLong?ButtonEvent::None:ButtonEvent::ShortPress;
+  }
+  if(stable_&&!longSent_&&elapsed(now,pressedAt_)>=HoldMs){longSent_=true;return ButtonEvent::LongPress;}
+  return ButtonEvent::None;
  }
 };
 inline int batteryPercent(float v){if(!std::isfinite(v)||v<2.5f||v>4.5f)return -1;

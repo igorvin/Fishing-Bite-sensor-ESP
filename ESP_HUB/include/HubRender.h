@@ -78,10 +78,17 @@ inline Frame render(const Model& model,uint32_t now,int hubBattery,const Diagnos
   f.text(d.mac[0]?d.mac:"MAC НЕИЗВЕСТЕН",2,32,124);
   std::snprintf(buf,sizeof(buf),"RX %lu / BAD %lu",(unsigned long)d.rx,(unsigned long)d.invalid);f.text(buf,2,43,124);
   std::snprintf(buf,sizeof(buf),"DROP %lu / REG %lu",(unsigned long)d.dropped,(unsigned long)model.registryDrops);f.text(buf,2,54,124);
+ }else if(v.screen==Screen::Mac){
+  // Large MAC for pairing: "AA:BB:CC" / "DD:EE:FF" at double size (8 x 12 px = 96 px wide).
+  f.text("MAC ХАБА",2,21,124);
+  if(std::strlen(d.mac)==17){char half[9]{};std::memcpy(half,d.mac,8);f.text(half,16,32,120,2);std::memcpy(half,d.mac+9,8);f.text(half,16,48,120,2);}
+  else f.text("НЕИЗВЕСТЕН",2,40,124,2);
  }else if(v.screen==Screen::Summary){
-  f.text(d.radio?"ГОТОВ К ПРИЁМУ":"РАДИО: ОШИБКА",2,23,124);
-  std::snprintf(buf,sizeof(buf),"УДИЛИЩ: %u",unsigned(model.rodCount()));f.text(buf,4,39,120,2);
-  f.text("УЧТЕНО С ЗАПУСКА",2,57,124);
+  // The startup screen carries the hub MAC so a sensor can be paired without USB.
+  f.text(d.radio?"ГОТОВ К ПРИЁМУ":"РАДИО: ОШИБКА",2,21,124);
+  std::snprintf(buf,sizeof(buf),"УДИЛИЩ: %u",unsigned(model.rodCount()));f.text(buf,4,31,120,2);
+  f.text("УЧТЕНО С ЗАПУСКА",2,47,124);
+  f.text(std::strlen(d.mac)==17?d.mac:"MAC НЕИЗВЕСТЕН",2,57,124);
  }else if(v.screen==Screen::List){
   const size_t pages=std::max<size_t>(1,(model.rodCount()+2)/3),page=v.page%pages;
   std::snprintf(buf,sizeof(buf),"УДИЛИЩА %u/%u",unsigned(page+1),unsigned(pages));f.text(buf,2,21,124);

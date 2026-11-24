@@ -25,26 +25,3 @@ class BenchLayout extends WidgetBase {
     `;
 }
 )JS";
-
-inline const char* benchStateText(bite::State state,bool russian){
-    if(!russian)return bite::stateName(state);
-    switch(state){
-        case bite::State::Disarmed:return "Выключена";
-        case bite::State::Settling:return "Стабилизация";
-        case bite::State::Armed:return "На охране";
-        case bite::State::MotionSuppressed:return "Движение: пауза";
-        case bite::State::Fault:return "Ошибка IMU";
-        case bite::State::Calibrating:return "Калибровка";
-    }
-    return "Ошибка";
-}
-inline String benchCalibrationText(bite::Calibration calibration,uint8_t progress,bool russian){
-    switch(calibration){
-        case bite::Calibration::None:return russian?"Не выполнена":"Not calibrated";
-        case bite::Calibration::Running:return String(russian?"Не трогать: ":"Keep still: ")+progress+"%";
-        case bite::Calibration::Success:return russian?"Успешно":"Success";
-        case bite::Calibration::Moving:return russian?"Отклонена: движение":"Rejected: movement";
-        case bite::Calibration::SensorError:return russian?"Ошибка IMU":"Rejected: IMU error";
-    }
-    return russian?"Ошибка":"Error";
-}
