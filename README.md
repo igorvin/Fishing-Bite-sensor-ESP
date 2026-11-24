@@ -313,7 +313,7 @@ The sensor does not need the rod to be perfectly still. During calibration and a
 | Check | Limit | Means |
 |---|---|---|
 | Position drift (first vs second half of the window) | 0.035 g (≈2°) | the rod is being moved to a new place |
-| Peak-to-peak jolt on any axis | 0.20 g | the sensor is being handled |
+| Peak-to-peak jolt on any axis | 0.20 g; in strong sway up to 6 × sway, never above 0.30 g | the sensor is being handled |
 | Sway (standard deviation) | 0.05 g | wind too strong to guard reliably |
 
 If the window is steady, the sensor arms and **raises the threshold above the measured sway**: threshold = max(step threshold, sway × step multiplier). The journal shows it, e.g. `ARMED: ambient 0.0120 g -> threshold 0.048 g (raised for sway)`. The sway is re-measured at every arming, so a calm moment gives back full sensitivity.

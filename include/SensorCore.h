@@ -57,7 +57,9 @@ enum class Unsteady:uint8_t {None,Magnitude,Range,Drift,Noise};
 enum class CalReject:uint8_t {None,Magnitude,Deviation,Noise,Drift};
 inline CalReject calRejectFrom(Unsteady u){switch(u){case Unsteady::Magnitude:return CalReject::Magnitude;case Unsteady::Range:return CalReject::Deviation;case Unsteady::Drift:return CalReject::Drift;case Unsteady::Noise:return CalReject::Noise;default:return CalReject::None;}}
 // Steady = swaying is allowed, being handled or moved is not. Limits (2026-11-23, user: arm in wind):
-//  every |a| within 0.85..1.15 g; peak-to-peak per axis <= 0.20 g (no handling jolts);
+//  every |a| within 0.85..1.15 g; peak-to-peak per axis <= max(0.20 g, 6 x SD), never above
+//  0.30 g (2026-11-24 field log: wind with SD 0.03..0.05 g has 0.20..0.21 g peak-to-peak, so a
+//  fixed 0.20 g kept rejecting it; a single jolt in a quiet window is still caught);
 //  mean of the first and second half within 0.035 g (~2 deg, the rod is not being moved);
 //  standard deviation <= 0.05 g (beyond that the threshold would exceed ~0.2 g).
 // The window's standard deviation becomes the noise that raises the effective threshold.
@@ -65,8 +67,9 @@ class SteadyWindow {
     uint32_t start_=0,n_=0,nA_=0,nB_=0;Vec3 mean_{0,0,0},m2_{0,0,0},sumA_{0,0,0},sumB_{0,0,0},lo_{0,0,0},hi_{0,0,0};
     static Vec3 scaled(Vec3 v,float k){return {v.x*k,v.y*k,v.z*k};}
 public:
-    static constexpr float rangeMaxG=.20f,driftMaxG=.035f,noiseMaxG=.05f;
-    static float limit(Unsteady u){return u==Unsteady::Range?rangeMaxG:u==Unsteady::Drift?driftMaxG:u==Unsteady::Noise?noiseMaxG:0.f;}
+    static constexpr float rangeMaxG=.20f,rangeSdFactor=6.f,rangeHardMaxG=.30f,driftMaxG=.035f,noiseMaxG=.05f;
+    static float rangeLimit(float sd){return std::min(rangeHardMaxG,std::max(rangeMaxG,rangeSdFactor*sd));}
+    static float limit(Unsteady u){return u==Unsteady::Range?rangeHardMaxG:u==Unsteady::Drift?driftMaxG:u==Unsteady::Noise?noiseMaxG:0.f;}
     void reset(uint32_t now){start_=now;n_=nA_=nB_=0;mean_=m2_=sumA_=sumB_=lo_=hi_=Vec3{0,0,0};}
     // Immediate failures (magnitude, jolt range); value receives the offending figure.
     Unsteady add(Vec3 a,uint32_t now,uint32_t windowMs,float& value){
@@ -75,8 +78,8 @@ public:
         ++n_;Vec3 d=a-mean_;float n=float(n_);mean_.x+=d.x/n;mean_.y+=d.y/n;mean_.z+=d.z/n;
         m2_.x+=d.x*(a.x-mean_.x);m2_.y+=d.y*(a.y-mean_.y);m2_.z+=d.z*(a.z-mean_.z);
         if(elapsed(now,start_)<windowMs/2){sumA_.x+=a.x;sumA_.y+=a.y;sumA_.z+=a.z;++nA_;}else{sumB_.x+=a.x;sumB_.y+=a.y;sumB_.z+=a.z;++nB_;}
-        float range=std::max(hi_.x-lo_.x,std::max(hi_.y-lo_.y,hi_.z-lo_.z));
-        if(range>rangeMaxG){value=range;return Unsteady::Range;}
+        float range=this->range();
+        if(range>rangeHardMaxG){value=range;return Unsteady::Range;}
         return Unsteady::None;
     }
     // Enough samples for a verdict: the window has elapsed with at least 50 Hz effective rate.
@@ -85,8 +88,10 @@ public:
         float drift=magnitude(scaled(sumA_,1.f/float(nA_))-scaled(sumB_,1.f/float(nB_)));
         if(!std::isfinite(drift)||drift>driftMaxG){value=drift;return Unsteady::Drift;}
         float sd=noise();if(!std::isfinite(sd)||sd>noiseMaxG){value=sd;return Unsteady::Noise;}
+        float r=range();if(r>rangeLimit(sd)){value=r;return Unsteady::Range;}
         value=sd;return Unsteady::None;
     }
+    float range()const{return n_?std::max(hi_.x-lo_.x,std::max(hi_.y-lo_.y,hi_.z-lo_.z)):0.f;}
     float noise()const{return n_>1?std::sqrt((m2_.x+m2_.y+m2_.z)/float(n_-1)):0.f;}
     Vec3 mean()const{return mean_;}
 };
@@ -99,6 +104,8 @@ struct Telemetry {
     // SETTLING diagnostics: windows that were not steady since SETTLING began and the last
     // cause (Unsteady) with its value and limit.
     uint32_t settleResets=0;uint8_t settleCause=0;float settleValue=0,settleLimit=0;
+    // Why the last SUPPRESSED started: pitch and roll change from the armed position, degrees.
+    float suppressPitchDeg=0,suppressRollDeg=0;
 };
 class Pulse {
     bool on_=false;uint32_t start_=0,duration_=0;
@@ -213,7 +220,10 @@ public:
                 (cfg_.tiltDeg>0&&angleDifference(roll(orientation_),roll(base_))>=cfg_.tiltDeg);
             if(moved&&okMagnitude>.75f&&okMagnitude<1.25f){
                 if(!over_){over_=true;overAt_=now;}
-                if(elapsed(now,overAt_)>=cfg_.suppressHoldMs){transition(State::MotionSuppressed,now);lastSuppressionTick_=now;return 0;}
+                if(elapsed(now,overAt_)>=cfg_.suppressHoldMs){
+                    t_.suppressPitchDeg=angleDifference(pitch(orientation_),pitch(base_));t_.suppressRollDeg=angleDifference(roll(orientation_),roll(base_));
+                    transition(State::MotionSuppressed,now);lastSuppressionTick_=now;return 0;
+                }
             }else over_=false;
         }
         float signal=cfg_.legacyMode?t_.signal.legacy:t_.signal.dynamic;

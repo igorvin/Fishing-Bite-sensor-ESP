@@ -42,7 +42,7 @@ std::vector<std::pair<const char*,std::function<void()>>> tests={
 {"first-armed-impulse",[]{SensorCore c;uint32_t t=arm(c);uint8_t event=0;for(int i=0;i<5;++i){t+=10;event|=c.update({.1f,0,1},t);}require(event==1,"first impulse after settle must not become gravity baseline");}},
 {"dynamic-versus-legacy",[]{SensorCore d,l;auto t=arm(d);arm(l);Config cfg=l.config();cfg.legacyMode=true;l.configure(cfg);int de=0,le=0;for(int i=0;i<10;++i){t+=10;de+=d.update({.1f,0,1},t)==1;le+=l.update({.1f,0,1},t)==1;}require(de==1&&le==0,"same transverse input dynamic triggers once, legacy misses");}},
 {"stationary-calibration",[]{SensorCore c;calibrate(c);require(c.calibration()==Calibration::Success&&c.telemetry().noiseG<.0001f,"quiet outcome and noise");}},
-{"moving-calibration",[]{SensorCore c;c.update({0,0,1},100);c.beginCalibration(100);c.update({.08f,0,1},110);require(c.state()==State::Calibrating,"a small sway sample is not handling");c.update({.3f,0,1},120);require(c.calibration()==Calibration::Moving&&!c.calibrated()&&c.state()==State::Disarmed&&c.telemetry().calReject==CalReject::Deviation,"a handling jolt rejects calibration");}},
+{"moving-calibration",[]{SensorCore c;c.update({0,0,1},100);c.beginCalibration(100);c.update({.08f,0,1},110);require(c.state()==State::Calibrating,"a small sway sample is not handling");c.update({.35f,0,1},120);require(c.calibration()==Calibration::Moving&&!c.calibrated()&&c.state()==State::Disarmed&&c.telemetry().calReject==CalReject::Deviation,"a handling jolt rejects calibration");}},
 {"noisy-calibration",[]{SensorCore c;uint32_t t=calibrate(c);c.beginCalibration(t);for(int i=0;i<205;++i){t+=10;c.update({i%2?.01f:-.01f,0,1},t);}require(c.calibrated()&&c.telemetry().noiseG>.009f,"steady vibration is accepted and measured");
   c.setArmed(true,t);for(int i=0;i<160;++i){t+=10;c.update({i%2?.01f:-.01f,0,1},t);}require(c.state()==State::Armed&&c.telemetry().effectiveG>.035f,"arming in the same vibration raises the threshold");
   c.setArmed(false,t);c.setArmed(true,t);for(int i=0;i<160;++i){t+=10;c.update({0,0,1},t);}require(c.state()==State::Armed&&c.telemetry().effectiveG<.021f,"arming when still uses the configured threshold again");}},
@@ -96,8 +96,8 @@ std::vector<std::pair<const char*,std::function<void()>>> tests={
 {"csv-buffer-backpressure",[]{CsvBuffer<16> q;require(q.append("first\n",6),"enqueue full record");require(!q.append("too-long-record\n",16)&&q.size()==6,"overflow drops whole record");char out[16];require(q.peek(out,3)==3&&out[0]=='f',"partial drain");q.consume(3);require(q.append("second\n",7),"wrap-around enqueue");auto n=q.peek(out,16);require(std::string(out,n)=="st\nsecond\n","record order after wrap");}},
 {"persisted-noise-validation",[]{SensorCore c;require(c.restoreNoise(.01f)&&c.telemetry().noiseG==.01f,"restore noise result");require(!c.restoreNoise(.2f)&&c.telemetry().noiseG==.01f,"reject invalid noise without replacing");require(!c.calibrated()&&!c.setArmed(true,0),"stored noise alone never proves current IMU ready");}},
 {"calibration-reject-reason",[]{
-  SensorCore c;uint32_t t=1000;c.update({0,0,1},t);c.beginCalibration(t);t+=10;c.update({.25f,0,1},t);
-  require(c.calibration()==Calibration::Moving&&c.telemetry().calReject==CalReject::Deviation&&c.telemetry().calRejectValue>.249f&&c.telemetry().calRejectValue<.251f,"handling jolt is recorded with its peak-to-peak size");
+  SensorCore c;uint32_t t=1000;c.update({0,0,1},t);c.beginCalibration(t);t+=10;c.update({.35f,0,1},t);
+  require(c.calibration()==Calibration::Moving&&c.telemetry().calReject==CalReject::Deviation&&c.telemetry().calRejectValue>.349f&&c.telemetry().calRejectValue<.351f,"a jolt above 0.30 g is rejected at once with its size");
   c.beginCalibration(t);require(c.telemetry().calReject==CalReject::None,"a new calibration clears the old reason");t+=10;c.update({0,0,.7f},t);
   require(c.telemetry().calReject==CalReject::Magnitude,"out-of-range magnitude is recorded");
   SensorCore d;t=1000;d.update({0,0,1},t);d.beginCalibration(t);for(int i=0;i<201;++i){t+=10;d.update({i<100?0.f:.06f,0,1},t);}
@@ -107,10 +107,10 @@ std::vector<std::pair<const char*,std::function<void()>>> tests={
 {"button-arm-uncalibrated-reproduction",[]{
   // Field report: after RESET the button would not arm, web ARM worked, then the button worked.
   SensorCore c;Config cfg;c.configure(cfg);uint32_t t=1000;c.update({0,0,1},t);c.beginCalibration(t);
-  for(int i=0;i<20;++i){t+=10;c.update({(i%2)?.15f:-.15f,0,1},t);}
+  for(int i=0;i<20;++i){t+=10;c.update({(i%2)?.2f:-.2f,0,1},t);}
   require(!c.calibrated()&&c.calibration()==Calibration::Moving,"a finger jolting the board during boot calibration rejects it");
   require(c.setArmed(true,t)&&c.state()==State::Calibrating,"button ARM then needs a calibration");
-  for(int i=0;i<10;++i){t+=10;c.update({(i%2)?.15f:-.15f,0,1},t);}
+  for(int i=0;i<10;++i){t+=10;c.update({(i%2)?.2f:-.2f,0,1},t);}
   require(!c.desiredArmed()&&c.state()==State::Disarmed,"release jiggle silently cancels that ARM (core behaviour kept)");
   // ArmAssist: same button ARM, calibration starts only 1 s after release.
   ArmAssist assist;assist.defer(t);require(!assist.due(t+500,true),"not before the settle delay");
@@ -156,7 +156,7 @@ std::vector<std::pair<const char*,std::function<void()>>> tests={
   uint8_t ev=0;for(int i=0;i<1000;++i){t+=10;ev|=c.update(sway(t,.03f),t);}require(ev==0&&c.telemetry().effectiveG>.06f,"10 s of the same sway: no alarm, threshold raised above it");
   for(int i=0;i<8;++i){t+=10;Vec3 a=sway(t,.03f);a.y+=.25f;ev|=c.update(a,t);}require(ev==1,"a bite stronger than the sway still alarms");
   // Being handled, being moved, or sway too strong: not steady, cause recorded, no arming.
-  SensorCore h;h.configure(cfg);t=calibrate(h);h.setArmed(true,t);for(int i=0;i<400;++i){t+=10;h.update({(i%30==0)?.3f:0.f,0,1},t);}
+  SensorCore h;h.configure(cfg);t=calibrate(h);h.setArmed(true,t);for(int i=0;i<400;++i){t+=10;h.update({(i%30==0)?.4f:0.f,0,1},t);}
   require(h.state()==State::Settling&&h.telemetry().settleResets>0&&h.telemetry().settleCause==uint8_t(Unsteady::Range),"handling jolts");
   SensorCore m;m.configure(cfg);t=calibrate(m);m.setArmed(true,t);for(int i=0;i<400;++i){t+=10;m.update({.0008f*float(i),0,1},t);}
   require(m.state()==State::Settling&&m.telemetry().settleCause==uint8_t(Unsteady::Drift),"slowly moving to a new position");
@@ -174,6 +174,17 @@ std::vector<std::pair<const char*,std::function<void()>>> tests={
   require(nearestSensitivity(.02f)==3&&nearestSensitivity(.15f)==0&&nearestSensitivity(.002f)==4&&nearestSensitivity(std::numeric_limits<float>::quiet_NaN())==3,"old saved thresholds map to the closest preset");
   require(clampSensitivity(-1)==3&&clampSensitivity(9)==3&&clampSensitivity(0)==0,"out-of-range index falls back to the default");
   SensorCore c;require(c.configure(configForSensitivity(0)),"applies");uint32_t t=arm(c);(void)t;}},
+{"jolt-limit-follows-sway",[]{
+  // Field log 2026-11-24: wind with SD 0.03..0.05 g reached 0.20..0.21 g peak-to-peak and kept failing a fixed 0.20 g limit.
+  require(SteadyWindow::rangeLimit(0)==.20f&&SteadyWindow::rangeLimit(.04f)>.239f&&SteadyWindow::rangeLimit(.1f)==.30f,"limit = max(0.20, 6 x SD), capped at 0.30");
+  SensorCore c;Config cfg;c.configure(cfg);uint32_t t=calibrate(c);c.setArmed(true,t);
+  for(int i=0;i<400&&c.state()!=State::Armed;++i){t+=10;float ph=float(t%700)/700.f*6.2831853f;c.update({.05f*std::sin(ph)+((t%370)<10?.12f:0.f),0,1},t);}
+  require(c.state()==State::Armed&&c.telemetry().settleResets==0,"sway plus gusts, about 0.22 g peak-to-peak, arms in one window");
+  SensorCore q;q.configure(cfg);t=calibrate(q);q.setArmed(true,t);for(int i=0;i<150;++i){t+=10;q.update({i==70?.25f:0.f,0,1},t);}
+  require(q.state()==State::Settling&&q.telemetry().settleCause==uint8_t(Unsteady::Range)&&q.telemetry().settleValue>.249f,"one 0.25 g jolt in a quiet window is still handling");
+  SensorCore s2;s2.configure(cfg);t=arm(s2);for(int i=0;i<60;++i){t+=10;s2.update({0,.6427876f,.7660444f},t);}
+  require(s2.state()==State::MotionSuppressed&&s2.telemetry().suppressRollDeg>35.f&&s2.telemetry().suppressPitchDeg<1.f,"the suppression reason is recorded");
+  char line[200];LogEntry e{0,Log::Suppressed,0,0,0,27.3f,4.1f};formatLog(e,line,sizeof(line));require(std::strstr(line,"tilted 27.3 deg up/down, 4.1 deg roll"),"journal text for suppression");}},
 {"timestamp-rollover",[]{SensorCore c;uint32_t t=UINT32_MAX-1000;c.update({0,0,1},t);c.beginCalibration(t);for(int i=0;i<201;++i){t+=10;c.update({0,0,1},t);}require(c.calibrated(),"calibration spans rollover");}}
 };
 int failures=0;for(auto& test:tests){try{test.second();std::printf("PASS: %s\n",test.first);}catch(const std::exception& e){++failures;std::fprintf(stderr,"FAIL: %s: %s\n",test.first,e.what());}}

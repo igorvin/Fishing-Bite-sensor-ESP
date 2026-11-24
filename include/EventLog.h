@@ -8,7 +8,7 @@
 namespace bite {
 // Bounded RAM journal of what the sensor decided and why. Printed live on USB and
 // dumped by the "log" command, so a failed ARM can be explained after the fact.
-enum class Log:uint8_t {Boot,Button,Arm,ArmDeferred,ArmCancelled,State,Calibration,CalRetry,Sleep,Settling,Armed};
+enum class Log:uint8_t {Boot,Button,Arm,ArmDeferred,ArmCancelled,State,Calibration,CalRetry,Sleep,Settling,Armed,Suppressed};
 enum class Source:uint8_t {Button,Web,Serial};
 enum class Wake:uint8_t {Reset,Button,Other};
 enum class SleepReason:uint8_t {Button,Idle,Battery,Serial};
@@ -26,7 +26,7 @@ inline const char* buttonLogName(uint8_t a){
 inline int unsteadyText(Unsteady u,float value,char* out,size_t n){
     switch(u){
     case Unsteady::Magnitude:return std::snprintf(out,n,"|a| %.3f g, allowed 0.85..1.15",double(value));
-    case Unsteady::Range:return std::snprintf(out,n,"jolt %.3f g peak-to-peak, limit %.2f (handled?)",double(value),double(SteadyWindow::rangeMaxG));
+    case Unsteady::Range:return std::snprintf(out,n,"jolt %.3f g peak-to-peak, limit 0.20..0.30 (6x sway) (handled?)",double(value));
     case Unsteady::Drift:return std::snprintf(out,n,"position drifted %.3f g, limit %.3f (being moved?)",double(value),double(SteadyWindow::driftMaxG));
     case Unsteady::Noise:return std::snprintf(out,n,"sway %.4f g, limit %.2f (too strong)",double(value),double(SteadyWindow::noiseMaxG));
     default:return std::snprintf(out,n,"no reason recorded");
@@ -66,6 +66,8 @@ inline int formatLog(const LogEntry& e,char* out,size_t n){
     case Log::Settling:unsteadyText(Unsteady(e.b),e.v,why,sizeof(why));
         body=std::snprintf(out,n,"still SETTLING: %u%s windows of 1.5 s not steady, last: %s",unsigned(e.a),e.a==255?"+":"",why);break;
     // v = ambient sway (window SD), w = effective threshold
+    // v = pitch change, w = roll change in degrees
+    case Log::Suppressed:body=std::snprintf(out,n,"SUPPRESSED: rod tilted %.1f deg up/down, %.1f deg roll (limits 25/35)",double(e.v),double(e.w));break;
     case Log::Armed:body=std::snprintf(out,n,"ARMED: ambient %.4f g -> threshold %.3f g%s",double(e.v),double(e.w),e.v>.005f?" (raised for sway)":"");break;
     }
     return body<0?body:head+body;

@@ -476,6 +476,7 @@ void loop(){
     }
     if(sensor.state()!=loggedState){
         note(now,bite::Log::State,uint8_t(loggedState),uint8_t(sensor.state()));
+        if(sensor.state()==bite::State::MotionSuppressed){const auto& t=sensor.telemetry();note(now,bite::Log::Suppressed,0,0,0,t.suppressPitchDeg,t.suppressRollDeg);}
         if(sensor.state()==bite::State::Armed){
             // Ambient measured while settling and the threshold it implies (raised above wind sway).
             const auto& c=sensor.config();float noise=sensor.telemetry().noiseG;
