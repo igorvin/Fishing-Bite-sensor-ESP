@@ -32,15 +32,15 @@
 **Rod sensor**
 
 - 🎯 **Sensitive detection.** The LSM6DS3 accelerometer is read 104 times per second. The *Dynamic XYZ* algorithm removes gravity and reacts to a jolt in any direction, including across the rod.
-- 🔇 **Noise protection.** At start-up the sensor measures background vibration for 2 seconds and raises its threshold automatically in a noisy setting (wind, rod rest).
+- 🔇 **Wind and noise protection.** At every arming the sensor measures the sway for 1.5 seconds and raises its threshold above it: light wind neither blocks arming nor causes false alarms.
 - 🎣 **Pause while handling the rod.** When you pick up or tilt the rod, alarms pause. Once the rod is still again in its **new** position, the sensor re-arms by itself.
-- 🔔 **Local signals.** Whenever the sensor is awake (armed or not) the red LED gives a short flash every 5 seconds, so you can tell it from deep sleep, where everything is dark. While armed the green LED is also on. A bite is red LED plus buzzer. Volume and brightness are adjustable.
+- 🔔 **Local signals.** Whenever the sensor is awake (armed or not) the red LED gives a short flash every 5 seconds, so you can tell it from deep sleep, where everything is dark. While armed the green LED is also on. A bite is red LED plus buzzer. Volume is adjustable.
 - 📡 **ESP-NOW radio to the hub.** Three events: first bite, continuing bite, low battery.
-- 📱 **Phone setup.** The sensor runs its own Wi-Fi access point with a page at `http://192.168.4.1`, in English or Russian.
+- 📱 **A simple web page.** The sensor runs its own Wi-Fi access point with a page at `http://192.168.4.1`: state, arming, sensitivity (5 steps), volume. Everything else is in the *Settings* menu.
 - 🔘 **One button** for arming, disarming, deep sleep and wake.
 - 🔋 **Battery saving.** The sensor sleeps on a button hold or by itself after 3 idle minutes. A brush against the button in a bag does not wake it. Below 3.30 V it also goes to sleep to protect the cell.
 - 💾 **Settings are kept** in flash and survive firmware updates.
-- 🧾 **Event journal.** The sensor records what it decided and why: button presses, calibrations, arming. Read it over USB with `log` or in *Details*.
+- 🧾 **Event journal.** The sensor records what it decided and why: button presses, calibrations, arming. Read it over USB with `log`.
 
 **Hub (receiver)**
 
@@ -152,10 +152,10 @@ The sensor sends events only to the hub whose MAC address you give it.
    ```
 
 2. **Give the MAC to the sensor**, in either of two ways:
-   - **From the phone:** on the *Settings* page turn on "ESP-NOW enabled", type the MAC into "Hub unicast MAC" and press **"Save network and restart"**.
+   - **From the phone:** open the *Settings* menu, type the MAC into "Hub MAC" and press **"Save and restart"**. A filled-in MAC turns the hub link on by itself.
    - **Over USB:** in the sensor's serial monitor type `peer AA:BB:CC:DD:EE:FF` (the sensor must be disarmed).
 
-3. **Check the link.** After the restart the sensor introduces itself to the hub. The sensor's *Status* page shows "Registered at startup" in the ESP-NOW row, and the `status` command in the hub's serial monitor shows `rods=1`. Start-up order does not matter: if you restart the hub, a running sensor registers again.
+3. **Check the link.** After the restart the sensor introduces itself to the hub. The sensor's page shows "Answered at power-on" in the Hub row, and the `status` command in the hub's serial monitor shows `rods=1`. Start-up order does not matter: if you restart the hub, a running sensor registers again.
 
 > ℹ️ Registration is a one-off hello at start-up, not a continuous link check. Individual bites are not acknowledged. Before fishing, check that an alarm reaches the hub: arm the sensor and tap the rod.
 
@@ -165,73 +165,48 @@ The sensor sends events only to the hub whose MAC address you give it.
 2. On your phone join the Wi-Fi network **`BiteSensor`** (the name on first start; no password).
 3. Open **http://192.168.4.1** in the browser.
 
-The **Page** menu at the top has three sections: *Status*, *Sensor* and *Settings*. Ordinary settings are saved as soon as you change them; a "Saved" message appears.
+Everything fits on one page; the rarely used fields are in the **Settings** menu. Changes are saved at once; when something goes wrong (for example an ARM is cancelled) a pop-up message appears.
 
 <table>
 <tr>
-<td align="center" width="33%"><img src="docs/images/web-status-en.png" width="250" alt="Status page"><br><b>Status</b></td>
-<td align="center" width="33%"><img src="docs/images/web-sensor-en.png" width="250" alt="Sensor page"><br><b>Sensor</b></td>
-<td align="center" width="33%"><img src="docs/images/web-settings-en.png" width="250" alt="Settings page"><br><b>Settings</b></td>
+<td align="center" width="50%"><img src="docs/images/web-main-en.png" width="280" alt="Main page"><br><b>Main page</b></td>
+<td align="center" width="50%"><img src="docs/images/web-settings-en.png" width="280" alt="Settings menu"><br><b>Settings</b></td>
 </tr>
 </table>
 
-<sub>Pictures are taken from the firmware's real web front end (Settings library 1.4.3) with example values; your device shows its own numbers.</sub>
+<sub>Pictures are taken from the firmware's real web front end (Settings library 1.4.3) with example values.</sub>
 
-### Status
+### Main page
 
 | Item | What it shows or does |
 |---|---|
-| **State** | DISARMED / CALIBRATING / SETTLING / ARMED / SUPPRESSED (rod being moved) / FAULT (accelerometer error) |
-| **Calibration** | Result of the last background measurement: "Success" or "Rejected: movement" |
-| **Battery (approx.)** | Voltage and approximate charge. Without a cell it shows "No valid reading" |
-| **ESP-NOW** | Off / Ready; hub unconfirmed / Registered at startup |
+| **State** | Off / Arming… / ARMED / Paused: rod is being moved / Calibrating… / Sensor error |
+| **Battery** | Approximate charge in percent; "no reading" on USB power only |
+| **Hub** | "Not set up" (enter its MAC) / "Waiting for the hub" / "Answered at power-on" / "Radio error" |
 | **Armed** | Arms or disarms, like the button |
-| **Calibrate · keep still 2 s** | Measures the background again. Keep the sensor still for 2 seconds |
-| **Test sound / LED** | A short buzzer and red-LED signal. Nothing is sent to the hub |
-| **Serial CSV** | Streams every measurement over USB for analysis |
-| **Details** | Shows technical data (below) |
+| **Sensitivity** | 5 steps, "High" by default (see below) |
+| **Volume** | Buzzer volume, 0–100 % |
+| **Test signal** | A short buzzer and red-LED signal. Nothing is sent to the hub |
 
-<details>
-<summary><b>Technical details ("Details" switch)</b></summary>
-<p align="center"><img src="docs/images/web-details-en.png" width="300" alt="Technical details"></p>
-
-- **IMU / PWM / storage** — health of the accelerometer, outputs and flash (green means OK).
-- **XYZ, g** — current acceleration on three axes.
-- **Dynamic / legacy, g** — current motion strength for both algorithms.
-- **Noise / threshold, g** — measured background and effective trigger threshold; marked if noise raised the threshold.
-- **Events / pulses / suppressed ms** — bite count, signal count and time spent paused while the rod was moved.
-- **Hz / gaps / I2C errors** — sample rate (about 104 Hz) and communication errors.
-- **Sleep**, **ESP-NOW counters**, **Last message** — service information.
-</details>
-
-### Sensor (detection)
-
-| Setting | Default | Description |
+| Sensitivity | Threshold | Raised in wind to |
 |---|---|---|
-| **Algorithm** | Dynamic XYZ | *Dynamic XYZ* is recommended: it reacts to motion in any direction. *Legacy magnitude* is the old algorithm, kept for comparison |
-| **Threshold, g** | 0.020 | **Lower means more sensitive.** Range 0.002–0.5 g |
-| **Noise multiplier** | 4 | The effective threshold never drops below background × multiplier. Higher means fewer false alarms |
-| **Legacy threshold** | 0.15 | Only in Legacy mode |
-| **Alarm pulse** | 120 ms | Length of one buzzer and red-LED signal |
-| **Repeat period** | 300 ms | How often the signal repeats during a continuing bite |
-| **Continuous delay** | 250 ms | Continuous motion needed before a bite counts as continuing (event 2) |
-| **Motion suppression** | on | Pause alarms when the rod is picked up or tilted |
-| **Pitch limit** | 25° | Up/down tilt of the rod that starts the pause. 0 disables the check |
-| **Roll limit** | 35° | Rotation around the rod's axis that starts the pause. 0 disables the check |
-| **Motion hold** | 120 ms | How long the tilt must last before the pause starts |
+| Low | 0.050 g | sway × 6 |
+| Below medium | 0.035 g | sway × 5 |
+| Medium | 0.025 g | sway × 4 |
+| **High** (default) | 0.018 g | sway × 4 |
+| Very high | 0.012 g | sway × 3 |
 
-### Settings
+### Settings menu
 
 | Setting | Description |
 |---|---|
+| **Rod name** | The sensor's Wi-Fi name and the name on the hub screen; the hub shows the first 16 bytes (16 Latin letters). Give each sensor its own name, e.g. "Feeder", "Carp-1" |
+| **Wi-Fi password** | Empty (open) or 8–63 characters |
+| **Hub MAC** | The hub's MAC as `AA:BB:CC:DD:EE:FF`. Empty means the hub link is off |
+| **Save and restart** | Applies the three fields above. They have no effect until you press it |
 | **Language / Язык** | English or Русский |
-| **Buzzer volume** | 0–100 % |
-| **Green LED / Red LED** | Brightness 0–100 %. Turn it down at night to save battery |
-| **AP name** | The sensor's Wi-Fi name, also the rod name on the hub screen; the hub shows the first 16 bytes (16 Latin letters). Give each sensor its own name, e.g. "Feeder", "Carp-1" |
-| **AP password** | Empty (open) or 8–63 characters |
-| **ESP-NOW enabled** | Allows sending events to the hub |
-| **Hub unicast MAC** | The hub's MAC as `AA:BB:CC:DD:EE:FF` |
-| **Save network and restart** | Applies the last four fields. They have no effect until you press it |
+
+Everything else (signal timings, the movement pause with its 25° / 35° limits, LED brightness 100 %) runs on tested defaults. Technical data, the journal and raw capture are available over USB (see [USB commands](#troubleshooting)).
 
 ## Using it on the water
 
@@ -326,11 +301,10 @@ After power-on the hub shows for about 20 seconds how many sensors it has seen, 
 
 ## Tuning sensitivity
 
-1. Start with the defaults: **Dynamic XYZ, threshold 0.020 g, noise multiplier ×4**.
-2. Arm and tap the rod blank lightly or pull the line. If nothing happens, lower the threshold step by step (0.015 → 0.010 …).
-3. Leave the rod on its rest for a few minutes, ideally in the wind. If false alarms appear, raise the threshold or the noise multiplier.
-4. In *Details* look at "Noise / threshold": if it says "noise raised threshold", your threshold is below the background and is not actually in use.
-5. If wind triggers the movement pause, raise the pitch/roll limits or the motion hold time.
+1. Start with **High**.
+2. Arm and tap the rod blank lightly or pull the line. If nothing happens, choose **Very high**.
+3. Leave the rod on its rest for a few minutes, ideally in the wind. If false alarms appear, go one step lower.
+4. The threshold in use is shown over USB: the journal line `ARMED: ambient … -> threshold …` at every arming.
 
 ### Wind and a swaying rod
 
@@ -342,9 +316,9 @@ The sensor does not need the rod to be perfectly still. During calibration and a
 | Peak-to-peak jolt on any axis | 0.20 g | the sensor is being handled |
 | Sway (standard deviation) | 0.05 g | wind too strong to guard reliably |
 
-If the window is steady, the sensor arms and **raises the threshold above the measured sway**: threshold = max(your threshold, sway × noise multiplier). The journal shows it, e.g. `ARMED: ambient 0.0120 g -> threshold 0.048 g (raised for sway)`, and *Details* marks the threshold "raised by noise/sway". The sway is re-measured at every arming, so a calm moment gives back full sensitivity.
+If the window is steady, the sensor arms and **raises the threshold above the measured sway**: threshold = max(step threshold, sway × step multiplier). The journal shows it, e.g. `ARMED: ambient 0.0120 g -> threshold 0.048 g (raised for sway)`. The sway is re-measured at every arming, so a calm moment gives back full sensitivity.
 
-The trade-off is physical: in wind a bite must be stronger than the sway to be noticed. If the wind still causes false alarms, raise the noise multiplier (×5–6); if bites are missed, lower it (×3). When it will not arm, `still SETTLING ...` lines in the journal name the reason.
+The trade-off is physical: in wind a bite must be stronger than the sway to be noticed. If the wind still causes false alarms, go one sensitivity step lower; if bites are missed, go one step higher. When it will not arm, `still SETTLING ...` lines in the journal name the reason.
 
 ## Battery
 
@@ -358,14 +332,14 @@ The trade-off is physical: in wind a bite must be stronger than the sway to be n
 | Problem | What to do |
 |---|---|
 | No `BiteSensor` network | The sensor is asleep: hold the button ~1 s. If it has been armed for over 2 minutes, Wi-Fi is already off: disarm with the button. If you renamed the network, look for the new name |
-| Will not arm | Three short beeps mean the ARM was cancelled: the sensor moved during calibration (often a finger on the button or the board). Let go, wait 2–3 seconds and arm again. The `log` USB command or "Recent events" in *Details* shows the reason |
-| "IMU FAULT" | Check the LSM6DS3 wiring (SDA D4, SCL D5, 3.3 V, GND). After recovery the sensor recalibrates by itself, but you must arm it again |
-| Hub shows no bites | Check the hub MAC and the "ESP-NOW enabled" switch; *Status* should say "Registered at startup". Alarms go to the hub only while armed |
-| Many false alarms | Raise the threshold or noise multiplier; make sure the sensor is mounted firmly |
-| Battery "No valid reading" | Normal when powered from USB without a cell |
-| "FS ERROR" in details | Flash cannot be read; settings work only until the next reboot. Do not format the flash, or old settings will be lost |
+| Will not arm | Three short beeps mean the ARM was cancelled: the sensor moved during calibration (often a finger on the button or the board). Let go, wait 2–3 seconds and arm again. The `log` USB command shows the reason |
+| "Sensor error" | Check the LSM6DS3 wiring (SDA D4, SCL D5, 3.3 V, GND). After recovery the sensor recalibrates by itself, but you must arm it again |
+| Hub shows no bites | Check the hub MAC in *Settings*; the Hub row should say "Answered at power-on". Alarms go to the hub only while armed |
+| Many false alarms | Go one sensitivity step lower; make sure the sensor is mounted firmly |
+| Battery "no reading" | Normal when powered from USB without a cell |
+| `storage=0` in the USB `status` | Flash cannot be read; settings work only until the next reboot. Do not format the flash, or old settings will be lost |
 
-**Sensor USB commands** (serial monitor, 115200): `status` — state, `log` — journal of the last 32 events, `sleep` — go to sleep, `register` — repeat hub registration, `peer AA:BB:CC:DD:EE:FF` — set the hub. `sleep`, `register` and `peer` work only while disarmed.
+**Sensor USB commands** (serial monitor, 115200): `status` — state, `log` — journal of the last 32 events, `csv on` / `csv off` — stream every measurement (up to 104 Hz) for analysis, `sleep` — go to sleep, `register` — repeat hub registration, `peer AA:BB:CC:DD:EE:FF` — set the hub. `sleep`, `register` and `peer` work only while disarmed.
 
 ## For developers
 

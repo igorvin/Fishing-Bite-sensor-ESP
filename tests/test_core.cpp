@@ -6,6 +6,7 @@
 #include "PowerButton.h"
 #include "Feedback.h"
 #include "EventLog.h"
+#include "Sensitivity.h"
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
@@ -165,6 +166,14 @@ std::vector<std::pair<const char*,std::function<void()>>> tests={
   char line[200];LogEntry e{1000,Log::Settling,7,uint8_t(Unsteady::Drift),0,.05f};formatLog(e,line,sizeof(line));
   require(std::strstr(line,"still SETTLING")&&std::strstr(line,"7 windows")&&std::strstr(line,"drifted 0.050 g"),"journal text for settling");
   e=LogEntry{1000,Log::Armed,0,0,0,.02f,.08f};formatLog(e,line,sizeof(line));require(std::strstr(line,"threshold 0.080 g (raised for sway)"),"journal text for armed in sway");}},
+{"sensitivity-presets",[]{
+  require(sensitivityCount==5&&defaultSensitivity==3,"five presets, High by default");
+  for(uint8_t i=0;i<sensitivityCount;++i){Config c=configForSensitivity(i);require(validConfig(c)&&!c.legacyMode,"every preset is a valid Dynamic configuration");
+    if(i)require(c.thresholdG<sensitivityPresets[i-1].thresholdG&&c.noiseMultiplier<=sensitivityPresets[i-1].noiseMultiplier,"higher sensitivity never raises threshold or multiplier");
+    Config d;require(c.repeatMs==d.repeatMs&&c.continuousMs==d.continuousMs&&c.suppression&&c.upDeg==d.upDeg&&c.tiltDeg==d.tiltDeg&&c.suppressHoldMs==d.suppressHoldMs,"removed settings use tested defaults");}
+  require(nearestSensitivity(.02f)==3&&nearestSensitivity(.15f)==0&&nearestSensitivity(.002f)==4&&nearestSensitivity(std::numeric_limits<float>::quiet_NaN())==3,"old saved thresholds map to the closest preset");
+  require(clampSensitivity(-1)==3&&clampSensitivity(9)==3&&clampSensitivity(0)==0,"out-of-range index falls back to the default");
+  SensorCore c;require(c.configure(configForSensitivity(0)),"applies");uint32_t t=arm(c);(void)t;}},
 {"timestamp-rollover",[]{SensorCore c;uint32_t t=UINT32_MAX-1000;c.update({0,0,1},t);c.beginCalibration(t);for(int i=0;i<201;++i){t+=10;c.update({0,0,1},t);}require(c.calibrated(),"calibration spans rollover");}}
 };
 int failures=0;for(auto& test:tests){try{test.second();std::printf("PASS: %s\n",test.first);}catch(const std::exception& e){++failures;std::fprintf(stderr,"FAIL: %s: %s\n",test.first,e.what());}}
