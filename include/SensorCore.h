@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -13,7 +14,7 @@ inline bool valid(Vec3 a){return std::isfinite(a.x)&&std::isfinite(a.y)&&std::is
 inline float angleDifference(float a,float b){return std::fabs(std::remainder(a-b,360.f));}
 inline float pitch(Vec3 a){return std::atan2(-a.x,std::sqrt(a.y*a.y+a.z*a.z))*57.2957795f;}
 inline float roll(Vec3 a){return std::atan2(a.y,a.z)*57.2957795f;}
-struct Signal {float dynamic=0,legacy=0;};
+struct Signal {float dynamic=0,legacy=0,impulse=0;};
 class Features {
     Vec3 gravity_{}; float base_=1; uint32_t last_=0; bool started_=false;
 public:
@@ -27,6 +28,45 @@ public:
         if(!freeze){float k=dt/(500.f+dt);gravity_.x+=k*(a.x-gravity_.x);gravity_.y+=k*(a.y-gravity_.y);gravity_.z+=k*(a.z-gravity_.z);base_+=(dt/(10000.f+dt))*(magnitude(a)-base_);}
         return s;
     }
+};
+// Sharpness ("impulse") detector, from the 2026-11-24 field recordings
+// (docs/field-analysis-2026-11-24.md): wind made the rod vibrate at ~5 Hz by +-0.2..0.3 g,
+// bites are sharp impulses ringing at 15..30 Hz. The detector looks at the high-passed
+// acceleration (12 Hz), takes its envelope (max over the last 5 samples), and keeps a running
+// ambient level = median envelope over the last ~10 s, excluding the newest ~1 s, refreshed
+// every 0.5 s in every state. Effective threshold = max(floor, multiplier x ambient), so gusts
+// raise it within seconds and calm brings it back. Slow, smooth pulls are NOT seen by design.
+class Impulse {
+    // 2nd-order Butterworth high-pass, 12 Hz at the measured 111 Hz sample rate.
+    static constexpr float b0=.615846547f,b1=-1.231693094f,b2=.615846547f,a1=-1.078231611f,a2=.385154576f;
+    struct Axis {float x1=0,x2=0,y1=0,y2=0;
+        void prime(float x){x1=x2=x;y1=y2=0;}
+        float step(float x){float y=b0*x+b1*x1+b2*x2-a1*y1-a2*y2;x2=x1;x1=x;y2=y1;y1=y;return y;}};
+public:
+    static constexpr size_t EnvelopeSamples=5,AmbientSize=1152,RecentExcluded=112,MinHistory=100;
+    static constexpr uint32_t UpdateMs=500;
+private:
+    Axis x_,y_,z_;std::array<float,EnvelopeSamples> recent_{};size_t recentHead_=0;bool primed_=false;
+    std::array<float,AmbientSize> history_{},scratch_{};size_t head_=0,count_=0;float ambient_=0;uint32_t updatedAt_=0;bool updated_=false;
+    void refresh(){
+        // Median of the entries older than ~1 s, so a bite in progress cannot raise its own threshold.
+        size_t usable=count_>RecentExcluded+MinHistory?count_-RecentExcluded:count_;
+        if(usable<20){ambient_=0;return;}
+        for(size_t i=0;i<usable;++i)scratch_[i]=history_[(head_+AmbientSize-count_+i)%AmbientSize];
+        auto mid=scratch_.begin()+usable/2;std::nth_element(scratch_.begin(),mid,scratch_.begin()+usable);ambient_=*mid;
+    }
+public:
+    void reset(){primed_=false;count_=head_=0;ambient_=0;updated_=false;recent_.fill(0);}
+    float update(Vec3 a,uint32_t now){
+        if(!primed_){x_.prime(a.x);y_.prime(a.y);z_.prime(a.z);primed_=true;}
+        float hx=x_.step(a.x),hy=y_.step(a.y),hz=z_.step(a.z);
+        recent_[recentHead_]=std::sqrt(hx*hx+hy*hy+hz*hz);recentHead_=(recentHead_+1)%EnvelopeSamples;
+        float envelope=*std::max_element(recent_.begin(),recent_.end());
+        history_[head_]=envelope;head_=(head_+1)%AmbientSize;if(count_<AmbientSize)++count_;
+        if(!updated_||elapsed(now,updatedAt_)>=UpdateMs){refresh();updatedAt_=now;updated_=true;}
+        return envelope;
+    }
+    float ambient()const{return ambient_;}
 };
 struct Config {
     float thresholdG=.02f, legacyThresholdG=.15f, noiseMultiplier=4;
@@ -58,16 +98,17 @@ enum class CalReject:uint8_t {None,Magnitude,Deviation,Noise,Drift};
 inline CalReject calRejectFrom(Unsteady u){switch(u){case Unsteady::Magnitude:return CalReject::Magnitude;case Unsteady::Range:return CalReject::Deviation;case Unsteady::Drift:return CalReject::Drift;case Unsteady::Noise:return CalReject::Noise;default:return CalReject::None;}}
 // Steady = swaying is allowed, being handled or moved is not. Limits (2026-11-23, user: arm in wind):
 //  every |a| within 0.85..1.15 g; peak-to-peak per axis <= max(0.20 g, 6 x SD), never above
-//  0.30 g (2026-11-24 field log: wind with SD 0.03..0.05 g has 0.20..0.21 g peak-to-peak, so a
-//  fixed 0.20 g kept rejecting it; a single jolt in a quiet window is still caught);
+//  0.80 g (relative so wind passes while a single jolt in a quiet window is still caught);
 //  mean of the first and second half within 0.035 g (~2 deg, the rod is not being moved);
-//  standard deviation <= 0.05 g (beyond that the threshold would exceed ~0.2 g).
-// The window's standard deviation becomes the noise that raises the effective threshold.
+//  standard deviation <= 0.15 g. The window SD is kept as noiseG (information only); the
+//  detection threshold comes from the Impulse detector's running ambient.
 class SteadyWindow {
     uint32_t start_=0,n_=0,nA_=0,nB_=0;Vec3 mean_{0,0,0},m2_{0,0,0},sumA_{0,0,0},sumB_{0,0,0},lo_{0,0,0},hi_{0,0,0};
     static Vec3 scaled(Vec3 v,float k){return {v.x*k,v.y*k,v.z*k};}
 public:
-    static constexpr float rangeMaxG=.20f,rangeSdFactor=6.f,rangeHardMaxG=.30f,driftMaxG=.035f,noiseMaxG=.05f;
+    // Relaxed 2026-11-24 with the impulse detector: wind with SD 0.108 g (+-0.3 g at 5 Hz) must
+    // still arm; drift remains the "being moved" check.
+    static constexpr float rangeMaxG=.20f,rangeSdFactor=6.f,rangeHardMaxG=.80f,driftMaxG=.035f,noiseMaxG=.15f;
     static float rangeLimit(float sd){return std::min(rangeHardMaxG,std::max(rangeMaxG,rangeSdFactor*sd));}
     static float limit(Unsteady u){return u==Unsteady::Range?rangeHardMaxG:u==Unsteady::Drift?driftMaxG:u==Unsteady::Noise?noiseMaxG:0.f;}
     void reset(uint32_t now){start_=now;n_=nA_=nB_=0;mean_=m2_=sumA_=sumB_=lo_=hi_=Vec3{0,0,0};}
@@ -104,6 +145,8 @@ struct Telemetry {
     // SETTLING diagnostics: windows that were not steady since SETTLING began and the last
     // cause (Unsteady) with its value and limit.
     uint32_t settleResets=0;uint8_t settleCause=0;float settleValue=0,settleLimit=0;
+    // Impulse detector: running ambient (median envelope, g).
+    float ambientG=0;
     // Why the last SUPPRESSED started: pitch and roll change from the armed position, degrees.
     float suppressPitchDeg=0,suppressRollDeg=0;
 };
@@ -122,7 +165,7 @@ public:
     bool expired(uint32_t now,uint32_t duration)const{return elapsed(now,entered_)>=duration;}
 };
 class SensorCore {
-    Config cfg_{};Features features_;State state_=State::Fault;Calibration cal_=Calibration::None;Telemetry t_{};
+    Config cfg_{};Features features_;Impulse impulse_;State state_=State::Fault;Calibration cal_=Calibration::None;Telemetry t_{};
     bool healthy_=false,wanted_=false,calibrated_=false,started_=false;
     bool attacking_=false,releasing_=false,motion_=false,over_=false,quiet_=false;
     uint32_t stateAt_=0,attackAt_=0,releaseAt_=0,motionAt_=0,lastEventAt_=0,overAt_=0,quietAt_=0;
@@ -171,13 +214,15 @@ public:
         if(started_&&dt==0)return 0;
         if(started_&&healthy_&&dt>25){++t_.gaps;if(dt>cfg_.maxGapMs)fault(now);}
         bool recovering=!healthy_;healthy_=true;
-        if(recovering){transition(State::Disarmed,now);features_.reset();orientation_=a;}
+        if(recovering){transition(State::Disarmed,now);features_.reset();impulse_.reset();orientation_=a;}
         started_=true;t_.lastSampleMs=now;t_.accel=a;++t_.samples;
         t_.signal=features_.update(a,now,state_==State::Armed&&motion_);
+        t_.signal.impulse=impulse_.update(a,now);t_.ambientG=impulse_.ambient();
         float okMagnitude=magnitude(a);
         float k=std::min<uint32_t>(dt,100u)/(120.f+std::min<uint32_t>(dt,100u));
         orientation_.x+=k*(a.x-orientation_.x);orientation_.y+=k*(a.y-orientation_.y);orientation_.z+=k*(a.z-orientation_.z);
-        t_.effectiveG=cfg_.legacyMode?cfg_.legacyThresholdG:std::max(cfg_.thresholdG,t_.noiseG*cfg_.noiseMultiplier);
+        // thresholdG is the impulse floor, noiseMultiplier scales the running ambient.
+        t_.effectiveG=cfg_.legacyMode?cfg_.legacyThresholdG:std::max(cfg_.thresholdG,t_.ambientG*cfg_.noiseMultiplier);
         if(state_==State::Calibrating){
             t_.calibrationProgress=uint8_t(std::min<uint32_t>(100u,elapsed(now,calAt_)*100/2000));
             float value=0;Unsteady u=window_.add(a,now,2000,value);
@@ -226,7 +271,7 @@ public:
                 }
             }else over_=false;
         }
-        float signal=cfg_.legacyMode?t_.signal.legacy:t_.signal.dynamic;
+        float signal=cfg_.legacyMode?t_.signal.legacy:t_.signal.impulse;
         if(!motion_){
             if(signal>=t_.effectiveG){if(!attacking_){attacking_=true;attackAt_=now;}
                 if(elapsed(now,attackAt_)>=cfg_.attackMs){motion_=true;motionAt_=lastEventAt_=now;attacking_=false;t_.event=1;++t_.events;}}

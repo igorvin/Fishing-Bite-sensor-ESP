@@ -189,7 +189,7 @@ void serviceSerial(uint32_t now){
   if(ch=='\r'||ch=='\n'){
    serialCommand[serialLength]=0;
    if(serialOverflow)Serial.println("SENSOR error: command too long");
-   else if(!std::strcmp(serialCommand,"status"))Serial.printf("SENSOR status radio=%u registered=%u attempts=%u node=%u control_rx=%lu control_tx=%lu state=%s imu=%u storage=%u pwm=%u calibrated=%u cal=%s want=%u arm_pending=%u cal_retries=%u board=%s wake=%s sleeps=%lu short_wakes=%lu last_sleep=%s button=%u vbat=%.2f sensitivity=%u noise=%.4f threshold=%.3f rate_hz=%.1f events=%lu i2c_errors=%lu csv_dropped=%lu\n",radioReady,registration.confirmed(),registration.attempts(),registration.node(),(unsigned long)controlRx,(unsigned long)controlTx,bite::stateName(sensor.state()),sensor.healthy(),storageOK,pwmOK,sensor.calibrated(),calibrationCode(sensor.calibration()),sensor.desiredArmed(),armAssist.pending(),armAssist.retries(),board::name,wakeName,(unsigned long)rtcSleeps,(unsigned long)rtcShortWakes,rtcLastSleep,digitalRead(board::button)==LOW,vbat,unsigned(sensitivity),sensor.telemetry().noiseG,sensor.telemetry().effectiveG,sampleRate,(unsigned long)sensor.telemetry().events,(unsigned long)readErrors,(unsigned long)csvDrops);
+   else if(!std::strcmp(serialCommand,"status"))Serial.printf("SENSOR status radio=%u registered=%u attempts=%u node=%u control_rx=%lu control_tx=%lu state=%s imu=%u storage=%u pwm=%u calibrated=%u cal=%s want=%u arm_pending=%u cal_retries=%u board=%s wake=%s sleeps=%lu short_wakes=%lu last_sleep=%s button=%u vbat=%.2f sensitivity=%u noise=%.4f ambient=%.4f threshold=%.3f rate_hz=%.1f events=%lu i2c_errors=%lu csv_dropped=%lu\n",radioReady,registration.confirmed(),registration.attempts(),registration.node(),(unsigned long)controlRx,(unsigned long)controlTx,bite::stateName(sensor.state()),sensor.healthy(),storageOK,pwmOK,sensor.calibrated(),calibrationCode(sensor.calibration()),sensor.desiredArmed(),armAssist.pending(),armAssist.retries(),board::name,wakeName,(unsigned long)rtcSleeps,(unsigned long)rtcShortWakes,rtcLastSleep,digitalRead(board::button)==LOW,vbat,unsigned(sensitivity),sensor.telemetry().noiseG,sensor.telemetry().ambientG,sensor.telemetry().effectiveG,sampleRate,(unsigned long)sensor.telemetry().events,(unsigned long)readErrors,(unsigned long)csvDrops);
    else if(!std::strcmp(serialCommand,"log")){
     Serial.printf("SENSOR log: %u of %lu entries kept, oldest first\n",unsigned(journal.size()),(unsigned long)journal.total());
     for(size_t i=0;i<journal.size();++i){char line[200];bite::formatLog(journal.at(i),line,sizeof(line));Serial.printf("  %s\n",line);}
@@ -213,7 +213,7 @@ void serviceSerial(uint32_t now){
    }else if(!std::strcmp(serialCommand,"csv on")){
     // Full-rate capture for analysis (moved from the web UI). Live journal lines pause meanwhile.
     Serial.println("SENSOR csv on");csvBuffer.clear();csv=true;
-    const char* header="ms,ax_g,ay_g,az_g,dynamic_g,legacy_g,noise_g,threshold_g,state,event,mode\n";csvBuffer.append(header,strlen(header));
+    const char* header="ms,ax_g,ay_g,az_g,dynamic_g,legacy_g,noise_g,threshold_g,state,event,mode,impulse_g,ambient_g\n";csvBuffer.append(header,strlen(header));
    }else if(!std::strcmp(serialCommand,"csv off")){csv=false;csvBuffer.clear();Serial.println("SENSOR csv off");
    }else if(serialLength)Serial.println("SENSOR commands: status, log, csv on, csv off, register, sleep, peer AA:BB:CC:DD:EE:FF (disarmed only)");
    // same timestamp as the idle check in loop(): a later millis() would wrap elapsed()
@@ -423,7 +423,7 @@ void loop(){
         if(result==bite::ReadStatus::Fresh){
             if(event&&sensor.state()==bite::State::Armed){alarmPulse.start(now,pulseMs);++pulseCount;sendPacket(event);}
             if(csv){const auto& t=sensor.telemetry();char line[220];
-                int n=snprintf(line,sizeof(line),"%lu,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%s,%u,%u\n",(unsigned long)now,sample.x,sample.y,sample.z,t.signal.dynamic,t.signal.legacy,t.noiseG,t.effectiveG,bite::stateName(sensor.state()),unsigned(event),0u);
+                int n=snprintf(line,sizeof(line),"%lu,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%s,%u,%u,%.5f,%.5f\n",(unsigned long)now,sample.x,sample.y,sample.z,t.signal.dynamic,t.signal.legacy,t.noiseG,t.effectiveG,bite::stateName(sensor.state()),unsigned(event),0u,t.signal.impulse,t.ambientG);
                 if(n<=0||n>=int(sizeof(line))||!csvBuffer.append(line,size_t(n)))++csvDrops;
             }
         }else if(result==bite::ReadStatus::TransportError){++readErrors;stopOutputs();}
@@ -478,9 +478,9 @@ void loop(){
         note(now,bite::Log::State,uint8_t(loggedState),uint8_t(sensor.state()));
         if(sensor.state()==bite::State::MotionSuppressed){const auto& t=sensor.telemetry();note(now,bite::Log::Suppressed,0,0,0,t.suppressPitchDeg,t.suppressRollDeg);}
         if(sensor.state()==bite::State::Armed){
-            // Ambient measured while settling and the threshold it implies (raised above wind sway).
-            const auto& c=sensor.config();float noise=sensor.telemetry().noiseG;
-            note(now,bite::Log::Armed,0,0,0,noise,c.legacyMode?c.legacyThresholdG:std::max(c.thresholdG,noise*c.noiseMultiplier));
+            // Running impulse ambient and the threshold it implies right now (it keeps adapting).
+            const auto& c=sensor.config();float ambient=sensor.telemetry().ambientG;bool raised=!c.legacyMode&&ambient*c.noiseMultiplier>c.thresholdG;
+            note(now,bite::Log::Armed,raised,0,0,ambient,c.legacyMode?c.legacyThresholdG:std::max(c.thresholdG,ambient*c.noiseMultiplier));
         }
         loggedState=sensor.state();
     }

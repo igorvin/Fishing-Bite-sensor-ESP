@@ -32,7 +32,7 @@
 **Rod sensor**
 
 - 🎯 **Sensitive detection.** The LSM6DS3 accelerometer is read 104 times per second. The *Dynamic XYZ* algorithm removes gravity and reacts to a jolt in any direction, including across the rod.
-- 🔇 **Wind and noise protection.** At every arming the sensor measures the sway for 1.5 seconds and raises its threshold above it: light wind neither blocks arming nor causes false alarms.
+- 🔇 **Wind protection.** The sensor reacts to the **sharp** jolt of a bite and ignores the smooth vibration wind gives the rod. The wind level is tracked continuously over the last 10 seconds, so a gust does not raise a false alarm and full sensitivity comes back in calm.
 - 🎣 **Pause while handling the rod.** When you pick up or tilt the rod, alarms pause. Once the rod is still again in its **new** position, the sensor re-arms by itself.
 - 🔔 **Local signals.** Whenever the sensor is awake (armed or not) the red LED gives a short flash every 5 seconds, so you can tell it from deep sleep, where everything is dark. While armed the green LED is also on. A bite is red LED plus buzzer. Volume is adjustable.
 - 📡 **ESP-NOW radio to the hub.** Three events: first bite, continuing bite, low battery.
@@ -188,13 +188,13 @@ Everything fits on one page; the rarely used fields are in the **Settings** menu
 | **Volume** | Buzzer volume, 0–100 % |
 | **Test signal** | A short buzzer and red-LED signal. Nothing is sent to the hub |
 
-| Sensitivity | Threshold | Raised in wind to |
+| Sensitivity | Sharpness floor | Threshold in wind |
 |---|---|---|
-| Low | 0.050 g | sway × 6 |
-| Below medium | 0.035 g | sway × 5 |
-| Medium | 0.025 g | sway × 4 |
-| **High** (default) | 0.018 g | sway × 4 |
-| Very high | 0.012 g | sway × 3 |
+| Low | 0.030 g | wind level × 10 |
+| Below medium | 0.022 g | × 8 |
+| Medium | 0.016 g | × 7 |
+| **High** (default) | 0.012 g | × 6 |
+| Very high | 0.009 g | × 5 |
 
 ### Settings menu
 
@@ -304,21 +304,23 @@ After power-on the hub shows for about 20 seconds how many sensors it has seen, 
 1. Start with **High**.
 2. Arm and tap the rod blank lightly or pull the line. If nothing happens, choose **Very high**.
 3. Leave the rod on its rest for a few minutes, ideally in the wind. If false alarms appear, go one step lower.
-4. The threshold in use is shown over USB: the journal line `ARMED: ambient … -> threshold …` at every arming.
+4. The current threshold and wind level are shown over USB: `status` (`ambient`, `threshold`) and the journal line `ARMED: ambient … -> threshold …`.
 
 ### Wind and a swaying rod
 
-The sensor does not need the rod to be perfectly still. During calibration and arming it checks a 1.5 s window for **steadiness**:
+Wind recordings (`docs/field-analysis-2026-11-24.md`) showed the wind shaking the rod about 5 times a second by ±0.2–0.3 g, while a bite is a short sharp jolt ringing at 15–30 Hz. So the sensor looks at **sharpness**: a filter removes everything slower than ~12 Hz, and the floor and multiplier come from the sensitivity step. The background level is the median sharpness over the last ~10 seconds (excluding the latest second), refreshed every half second in every state.
+
+On the same recordings, through the firmware core, at "High": in strong wind the sensor arms and stays armed with no false alarm, catches 33 of 35 light simulated bites in calm and 19 of 24 taps in wind. Before: 35 false alarms a minute and 12 of 35.
+
+Arming does not need complete stillness. A 1.5 s window is checked for **steadiness**:
 
 | Check | Limit | Means |
 |---|---|---|
 | Position drift (first vs second half of the window) | 0.035 g (≈2°) | the rod is being moved to a new place |
-| Peak-to-peak jolt on any axis | 0.20 g; in strong sway up to 6 × sway, never above 0.30 g | the sensor is being handled |
-| Sway (standard deviation) | 0.05 g | wind too strong to guard reliably |
+| Peak-to-peak jolt on any axis | 0.20 g; in strong sway up to 6 × sway, never above 0.80 g | the sensor is being handled |
+| Sway (standard deviation) | 0.15 g | wind too strong |
 
-If the window is steady, the sensor arms and **raises the threshold above the measured sway**: threshold = max(step threshold, sway × step multiplier). The journal shows it, e.g. `ARMED: ambient 0.0120 g -> threshold 0.048 g (raised for sway)`. The sway is re-measured at every arming, so a calm moment gives back full sensitivity.
-
-The trade-off is physical: in wind a bite must be stronger than the sway to be noticed. If the wind still causes false alarms, go one sensitivity step lower; if bites are missed, go one step higher. When it will not arm, `still SETTLING ...` lines in the journal name the reason.
+**Limitation:** a slow smooth pull (the fish draws the line steadily, without a jolt) is not seen by this detector. If such bites matter, a second channel based on the rod's tilt is needed, designed from recordings of slow pulls. If wind still causes false alarms, go one sensitivity step lower; if bites are missed, go one step higher.
 
 ## Battery
 
@@ -366,4 +368,4 @@ pio run -d ESP_HUB -e xiao_esp32c3 -e seeed_xiao_esp32s3
 
 ### Not verified yet
 
-Real fishing (weak bites, wind, false alarms), radio range, sleep current and battery life, PCB v4 and XIAO S3 hardware, the hub motor's physical vibration. Alarm delivery to the hub is not guaranteed: only the start-up registration is acknowledged. The open access point without a password is fine for the bench but is not secured.
+Real fishing (real bites, other rods and winds, slow pulls), radio range, sleep current and battery life, PCB v4 and XIAO S3 hardware, the hub motor's physical vibration. Alarm delivery to the hub is not guaranteed: only the start-up registration is acknowledged. The open access point without a password is fine for the bench but is not secured.

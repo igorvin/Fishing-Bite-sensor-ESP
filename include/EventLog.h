@@ -68,7 +68,8 @@ inline int formatLog(const LogEntry& e,char* out,size_t n){
     // v = ambient sway (window SD), w = effective threshold
     // v = pitch change, w = roll change in degrees
     case Log::Suppressed:body=std::snprintf(out,n,"SUPPRESSED: rod tilted %.1f deg up/down, %.1f deg roll (limits 25/35)",double(e.v),double(e.w));break;
-    case Log::Armed:body=std::snprintf(out,n,"ARMED: ambient %.4f g -> threshold %.3f g%s",double(e.v),double(e.w),e.v>.005f?" (raised for sway)":"");break;
+    // a = 1 when the running ambient (wind/vibration) raised the threshold above the floor
+    case Log::Armed:body=std::snprintf(out,n,"ARMED: ambient %.4f g -> threshold %.3f g%s (adapts continuously)",double(e.v),double(e.w),e.a?" raised by wind":"");break;
     }
     return body<0?body:head+body;
 }
