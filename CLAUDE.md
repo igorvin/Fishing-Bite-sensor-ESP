@@ -49,6 +49,7 @@ pio run -d ESP_HUB -e xiao_esp32c3 -e seeed_xiao_esp32s3 -e s3_zero
 
 - `ESP_HUB/src/main.cpp`, `ESP_HUB/include/HubCore.h`, `HubRender.h`, `DriverSession.h`: hub hardware adapter, portable model, shared one-bit renderer and OLED retry ownership.
 - `docs/hub-testing.md`: limited HU02 hardware results and remaining physical acceptance.
+- `kicad/kicad_hub/`: hub PCB rev A draft (XIAO C3, BQ24074, LiPo 1200 mAh, 68 x 40 mm) and "beeper" enclosure with belt clip / stand; regenerate with `_generator/run_hub.sh` and `enclosure/build.sh`. Not ordered or built; assumptions listed in its README.
 - `shared/StartupRadio.h`: shared bounded startup control parser/state used by both firmware roles.
 - `src/main.cpp`: firmware integration, Settings UI, configuration, outputs, ESP-NOW, USB CSV, and sleep policy.
 - `include/SensorCore.h`: portable production detector, also used by host tests and replay.
