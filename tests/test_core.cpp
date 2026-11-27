@@ -215,6 +215,41 @@ std::vector<std::pair<const char*,std::function<void()>>> tests={
   // while the simulated light bites in calm still alarm.
   for(uint8_t p=0;p<sensitivityCount;++p){auto w=replayField("wind.csv",p);require(w.armedRows>9000&&w.alarms==0,"wind: armed for most of 2 min with no alarm at every preset");}
   auto calm=replayField("calm_bites.csv",defaultSensitivity);require(calm.armedRows>4500&&calm.alarms>=30,"calm: the simulated light bites alarm at High");}},
+{"frequent-bites-keep-preset-threshold",[]{
+  // 2026-11-24 log: a run of bites raised the ambient ~5x (Very high 0.009 -> 0.035 g) and the
+  // next bites were missed. Bite samples no longer feed the ambient; the field calm run must
+  // stay at the preset floor while armed, at Very high and High.
+  for(uint8_t p:{uint8_t(4),defaultSensitivity}){
+    std::string path=std::string(__FILE__);path=path.substr(0,path.find_last_of('/'))+"/fixtures/field/calm_bites.csv";
+    std::ifstream in(path);require(bool(in),"field fixture present");
+    SensorCore c;Config cfg=configForSensitivity(p);require(c.configure(cfg),"preset applies");
+    std::string line;bool seen=false,started=false,armed=false;uint32_t origin=0,first=0;float worst=0;
+    while(std::getline(in,line)){
+      if(line.empty()||line[0]<'0'||line[0]>'9')continue;
+      std::stringstream ss(line);std::string f[4];for(auto& x:f)std::getline(ss,x,',');
+      uint32_t now=uint32_t(std::stoul(f[0]));Vec3 a{std::stof(f[1]),std::stof(f[2]),std::stof(f[3])};
+      if(!seen){seen=true;origin=now;}if(elapsed(now,origin)<4000)continue;
+      if(!started){c.update(a,now);c.beginCalibration(now);first=now;started=true;}
+      if(!armed&&c.calibrated()&&elapsed(now,first)>=3000){c.setArmed(true,now);armed=true;}
+      c.update(a,now);if(c.state()==State::Armed)worst=std::max(worst,c.telemetry().effectiveG);
+    }
+    require(armed&&worst<=cfg.thresholdG*1.25f,"frequent bites do not raise the threshold above the preset floor");
+  }
+  // Synthetic: quiet, then 20 sharp taps 0.4 s apart; a light tap right after must still alarm.
+  SensorCore c;Config cfg=configForSensitivity(4);c.configure(cfg);uint32_t t=calibrate(c);c.setArmed(true,t);
+  for(int i=0;i<300;++i){t+=9;c.update({0,0,1},t);}require(c.state()==State::Armed,"armed");
+  auto tap=[&](float g){uint8_t ev=0;for(int k=0;k<44;++k){t+=9;float r=k<20?g*std::exp(-k/6.f)*((k%3)-1):0;ev|=c.update({r,0,1},t);}return ev;};
+  for(int i=0;i<20;++i)tap(.05f);
+  require(c.telemetry().effectiveG<=cfg.thresholdG*1.25f,"after 8 s of taps the threshold stays at the floor");
+  require(tap(.02f)!=0,"a light tap after the run still alarms");}},
+{"onset-of-continuous-vibration-still-adapts",[]{
+  // The bite exclusion must not freeze the ambient: steady sharp vibration (not intermittent like
+  // bites) starting after arming stops alarming within ~10 s, as before the change.
+  SensorCore c;Config cfg=configForSensitivity(4);c.configure(cfg);uint32_t t=calibrate(c);c.setArmed(true,t);
+  for(int i=0;i<300;++i){t+=9;c.update({0,0,1},t);}require(c.state()==State::Armed,"armed");
+  uint32_t start=t,lastAlarm=t;
+  for(int i=0;i<2500;++i){t+=9;float v=.03f*std::sin(float(i)*2.f*3.14159265f*20.f*.009f);if(c.update({v,0,1},t))lastAlarm=t;}
+  require(c.state()==State::Armed&&elapsed(lastAlarm,start)<10000,"continuous vibration raises the ambient and alarms stop");}},
 {"timestamp-rollover",[]{SensorCore c;uint32_t t=UINT32_MAX-1000;c.update({0,0,1},t);c.beginCalibration(t);for(int i=0;i<201;++i){t+=10;c.update({0,0,1},t);}require(c.calibrated(),"calibration spans rollover");}}
 };
 int failures=0;for(auto& test:tests){try{test.second();std::printf("PASS: %s\n",test.first);}catch(const std::exception& e){++failures;std::fprintf(stderr,"FAIL: %s: %s\n",test.first,e.what());}}

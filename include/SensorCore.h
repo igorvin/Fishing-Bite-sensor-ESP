@@ -45,24 +45,42 @@ class Impulse {
 public:
     static constexpr size_t EnvelopeSamples=5,AmbientSize=1152,RecentExcluded=112,MinHistory=100;
     static constexpr uint32_t UpdateMs=500;
+    // Bite samples do not feed the ambient (2026-11-24, frequent bites raised it 5x): a sample is
+    // a "bite" when its envelope reaches the current threshold, plus the ringing for HoldMs after.
+    // Wind still raises the ambient: bites are intermittent, so when more than MaxBiteShare of the
+    // window would be excluded, or one bite lasts longer than MaxBiteMs, everything counts again.
+    static constexpr uint32_t HoldMs=300,MaxBiteMs=1500;
+    static constexpr float MaxBiteShare=.75f;
 private:
     Axis x_,y_,z_;std::array<float,EnvelopeSamples> recent_{};size_t recentHead_=0;bool primed_=false;
-    std::array<float,AmbientSize> history_{},scratch_{};size_t head_=0,count_=0;float ambient_=0;uint32_t updatedAt_=0;bool updated_=false;
+    std::array<float,AmbientSize> history_{},scratch_{};std::array<uint8_t,AmbientSize> bite_{};
+    size_t head_=0,count_=0;float ambient_=0;uint32_t updatedAt_=0;bool updated_=false;
+    bool inBite_=false;uint32_t biteStart_=0,lastOver_=0;
     void refresh(){
         // Median of the entries older than ~1 s, so a bite in progress cannot raise its own threshold.
         size_t usable=count_>RecentExcluded+MinHistory?count_-RecentExcluded:count_;
         if(usable<20){ambient_=0;return;}
-        for(size_t i=0;i<usable;++i)scratch_[i]=history_[(head_+AmbientSize-count_+i)%AmbientSize];
-        auto mid=scratch_.begin()+usable/2;std::nth_element(scratch_.begin(),mid,scratch_.begin()+usable);ambient_=*mid;
+        size_t first=head_+AmbientSize-count_,quiet=0;
+        for(size_t i=0;i<usable;++i){size_t k=(first+i)%AmbientSize;if(!bite_[k])scratch_[quiet++]=history_[k];}
+        size_t n=quiet;
+        if(quiet<20||float(usable-quiet)>MaxBiteShare*float(usable)){
+            for(size_t i=0;i<usable;++i)scratch_[i]=history_[(first+i)%AmbientSize];
+            n=usable;
+        }
+        auto mid=scratch_.begin()+n/2;std::nth_element(scratch_.begin(),mid,scratch_.begin()+n);ambient_=*mid;
     }
 public:
-    void reset(){primed_=false;count_=head_=0;ambient_=0;updated_=false;recent_.fill(0);}
-    float update(Vec3 a,uint32_t now){
+    void reset(){primed_=false;count_=head_=0;ambient_=0;updated_=false;inBite_=false;recent_.fill(0);}
+    // threshold: the effective threshold from the current ambient (max(floor, multiplier x ambient)).
+    float update(Vec3 a,uint32_t now,float threshold){
         if(!primed_){x_.prime(a.x);y_.prime(a.y);z_.prime(a.z);primed_=true;}
         float hx=x_.step(a.x),hy=y_.step(a.y),hz=z_.step(a.z);
         recent_[recentHead_]=std::sqrt(hx*hx+hy*hy+hz*hz);recentHead_=(recentHead_+1)%EnvelopeSamples;
         float envelope=*std::max_element(recent_.begin(),recent_.end());
-        history_[head_]=envelope;head_=(head_+1)%AmbientSize;if(count_<AmbientSize)++count_;
+        if(envelope>=threshold){if(!inBite_){inBite_=true;biteStart_=now;}lastOver_=now;}
+        else if(inBite_&&elapsed(now,lastOver_)>HoldMs)inBite_=false;
+        bool bite=inBite_&&elapsed(now,biteStart_)<=MaxBiteMs;
+        history_[head_]=envelope;bite_[head_]=bite;head_=(head_+1)%AmbientSize;if(count_<AmbientSize)++count_;
         if(!updated_||elapsed(now,updatedAt_)>=UpdateMs){refresh();updatedAt_=now;updated_=true;}
         return envelope;
     }
@@ -168,7 +186,7 @@ class SensorCore {
     Config cfg_{};Features features_;Impulse impulse_;State state_=State::Fault;Calibration cal_=Calibration::None;Telemetry t_{};
     bool healthy_=false,wanted_=false,calibrated_=false,started_=false;
     bool attacking_=false,releasing_=false,motion_=false,over_=false,quiet_=false;
-    uint32_t stateAt_=0,attackAt_=0,releaseAt_=0,motionAt_=0,lastEventAt_=0,overAt_=0,quietAt_=0;
+    uint32_t stateAt_=0,attackAt_=0,releaseAt_=0,motionAt_=0,lastEventAt_=0,overAt_=0;
     Vec3 orientation_{},base_{};SteadyWindow window_;
     uint32_t calAt_=0,lastSuppressionTick_=0;
     void clearEvent(){motion_=attacking_=releasing_=false;t_.event=0;}
@@ -217,7 +235,7 @@ public:
         if(recovering){transition(State::Disarmed,now);features_.reset();impulse_.reset();orientation_=a;}
         started_=true;t_.lastSampleMs=now;t_.accel=a;++t_.samples;
         t_.signal=features_.update(a,now,state_==State::Armed&&motion_);
-        t_.signal.impulse=impulse_.update(a,now);t_.ambientG=impulse_.ambient();
+        t_.signal.impulse=impulse_.update(a,now,std::max(cfg_.thresholdG,impulse_.ambient()*cfg_.noiseMultiplier));t_.ambientG=impulse_.ambient();
         float okMagnitude=magnitude(a);
         float k=std::min<uint32_t>(dt,100u)/(120.f+std::min<uint32_t>(dt,100u));
         orientation_.x+=k*(a.x-orientation_.x);orientation_.y+=k*(a.y-orientation_.y);orientation_.z+=k*(a.z-orientation_.z);
