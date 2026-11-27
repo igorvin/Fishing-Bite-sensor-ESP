@@ -1,5 +1,5 @@
-// Корпус хаба поклёвки rev A: «бипер» с откидной клипсой (ремень / подставка).
-// Плата hub rev A 68 x 40 мм, OLED SH1106 1.3" над платой, LiPo 1200 мА·ч за платой.
+// Корпус хаба поклёвки rev B (тонкий): «бипер» со скруглёнными краями и откидной клипсой (ремень / подставка).
+// Плата hub rev A 68 x 40 мм, OLED SH1106 1.3" над платой, плоский LiPo 703048 (7 мм) за платой.
 // Все размеры в мм. Система координат: x вправо, y вверх (вид спереди), z от задней крышки к экрану.
 // Точка (0,0) — левый нижний угол платы; координаты KiCad (u, v) переводятся как x = u - 100, y = 140 - v.
 //
@@ -12,7 +12,7 @@ $fn = 40;
 PCB = [68, 40];  PCB_T = 1.0;  PCB_R = 2;
 HOLES = [[2.2, 37.8], [2.2, 2.2], [43.3, 37.4], [41.2, 2.4]];      // H1..H4
 OLED = [4.0, 4.1, 39.4, 37.6];            // x1 y1 x2 y2 модуля (вид спереди)
-OLED_STANDOFF = 3.5;                       // зазор плата — плата модуля (гребёнка 2.5 + шайбы 1.0)
+OLED_STANDOFF = 3.0;                       // зазор плата — плата модуля (гребёнка 2.5 + шайба 0.5)
 OLED_T = 3.1;                              // модуль: плата 1.6 + стекло 1.5
 WIN = [31, 17];  WIN_C = [21.7, 20.6];     // окно под активную область 128x64 (сверить с модулем!)
 PLATE = [34.6, 20.6, 1.0];                 // прозрачная пластина (акрил/поликарбонат 1 мм)
@@ -24,51 +24,56 @@ SW_X = 61.5;                               // SW1 выключатель, ниж
 USB_XIAO_X = 56;                           // USB-C XIAO, верхний край (прошивка)
 
 // ---------------------------------------------------------------- аккумулятор и мотор
-BAT = [50, 34, 10];  BAT_POS = [2.0, 3.0]; // LiPo 1200 мА·ч, предположение 50 x 34 x 10 (уточнить!)
+BAT = [48, 30, 7];  BAT_POS = [5.0, 5.0];  // LiPo 703048: 7 x 30 x 48 мм, ~1000 мА·ч (603048 — 6 мм, ~850 мА·ч)
 MOTOR = [61, 26];  MOTOR_D = 10.4;         // монетка 10 мм на задней крышке
 
 // ---------------------------------------------------------------- корпус
-WALL = 3.2;  GAP = 0.5;                    // стенка (толще у углов под винты) и зазор до платы
-COVER_T = 2.5;                             // задняя крышка
+WALL = 2.0;  GAP = 0.5;                    // стенка и зазор до платы
+COVER_T = 2.0;                             // задняя крышка
 Z_BAT = COVER_T;                           // низ аккумулятора
-Z_PCB = COVER_T + BAT[2] + 2.0;            // низ платы: над аккумулятором 2 мм под головки винтов и выводы
+Z_PCB = COVER_T + BAT[2] + 1.0;            // низ платы: над аккумулятором 1 мм (выводы подрезать, каптон)
 Z_TOP = Z_PCB + PCB_T;                     // верх платы
 Z_IN = Z_TOP + OLED_STANDOFF + OLED_T + 0.4;    // внутренняя плоскость передней стенки
-FRONT_T = 1.8;
+FRONT_T = 1.5;
 Z_OUT = Z_IN + FRONT_T;                    // наружная плоскость экрана
 IN0 = [-GAP, -GAP];  IN1 = [PCB[0] + GAP, PCB[1] + GAP];
 OUT0 = [IN0[0] - WALL, IN0[1] - WALL];  OUT1 = [IN1[0] + WALL, IN1[1] + WALL];
-R_OUT = 3;
-CORNERS = [[-1.5, -1.5], [PCB[0] + 1.5, -1.5], [-1.5, PCB[1] + 1.5], [PCB[0] + 1.5, PCB[1] + 1.5]];
-SCREW_D = 1.8;  SCREW_CLR = 2.4;  BOSS_D = 4.6;
+R_OUT = PCB_R + GAP + WALL;                // 4.5: углы концентричны скруглению платы
+RF = 3.0;  RB = 1.2;                       // скругление переднего и заднего ребра
+SCREW_D = 1.8;  SCREW_CLR = 2.4;  POST_D = 3.8;   // 4 винта M2 x 14 сзади: крышка -> стойка -> плата -> бобышка
 
 module rrect(p0, p1, r, h) {
     hull() for (x = [p0[0] + r, p1[0] - r], y = [p0[1] + r, p1[1] - r]) translate([x, y, 0]) cylinder(r = r, h = h);
 }
 
 module outer(h) { rrect(OUT0, OUT1, R_OUT, h); }
-module inner(h) { rrect(IN0, IN1, 0.6, h); }
+module inner(h) { rrect(IN0, IN1, R_OUT - WALL, h); }
+module ring2d(r) { intersection() { translate([R_OUT - r, 0]) circle(r = r); translate([0, -r]) square([R_OUT, 2 * r]); } }
+// весь корпус одним «обмылком»: вертикальные углы R_OUT, переднее ребро RF, заднее RB
+module body() {
+    hull() for (x = [OUT0[0] + R_OUT, OUT1[0] - R_OUT], y = [OUT0[1] + R_OUT, OUT1[1] - R_OUT]) translate([x, y, 0]) {
+        translate([0, 0, Z_OUT - RF]) rotate_extrude() ring2d(RF);
+        translate([0, 0, RB]) rotate_extrude() ring2d(RB);
+    }
+}
 
 // ---------------------------------------------------------------- передняя оболочка
 module shell() {
     difference() {
         union() {
             difference() {
-                translate([0, 0, COVER_T]) outer(Z_OUT - COVER_T);
+                intersection() { body(); translate([0, 0, COVER_T]) outer(Z_OUT); }
                 translate([0, 0, COVER_T - 0.01]) inner(Z_IN - COVER_T + 0.01);
             }
-            // угловые бобышки под винты крышки
-            intersection() { translate([0, 0, COVER_T]) outer(Z_IN); for (c = CORNERS) translate([c[0], c[1], COVER_T]) cylinder(d = BOSS_D, h = Z_IN - COVER_T); }
-            // бобышки, к которым снизу прикручена плата
+            // бобышки над отверстиями платы: в них заходят винты крышки
             for (h = HOLES) translate([h[0], h[1], Z_TOP]) cylinder(d = 4.4, h = Z_IN - Z_TOP + 0.01);
             // световоды к светодиодам (тонкостенные трубки)
             for (l = LEDS) translate([l[0], l[1], Z_TOP + 1.2]) cylinder(d = 3.6, h = Z_IN - Z_TOP - 1.2 + 0.01);
             // направляющая толкателя кнопки
             translate([BTN[0], BTN[1], Z_TOP + BTN_H + 1.6]) cylinder(d = 7.2, h = Z_IN - Z_TOP - BTN_H - 1.6 + 0.01);
         }
-        // винты крышки и платы
-        for (c = CORNERS) translate([c[0], c[1], COVER_T - 0.1]) cylinder(d = SCREW_D, h = 12);
-        for (h = HOLES) translate([h[0], h[1], Z_TOP - 0.1]) cylinder(d = SCREW_D, h = 5);
+        // винты крышки (через плату)
+        for (h = HOLES) translate([h[0], h[1], Z_TOP - 0.1]) cylinder(d = SCREW_D, h = 4.5);
         // окно экрана: сквозное окно + карман под прозрачную пластину изнутри
         translate([WIN_C[0], WIN_C[1], Z_IN - 0.01]) rrect([-WIN[0] / 2, -WIN[1] / 2], [WIN[0] / 2, WIN[1] / 2], 1, FRONT_T + 1);
         translate([WIN_C[0], WIN_C[1], Z_IN - 0.01]) rrect([-PLATE[0] / 2 - 0.2, -PLATE[1] / 2 - 0.2], [PLATE[0] / 2 + 0.2, PLATE[1] / 2 + 0.2], 0.8, PLATE[2] + 0.01);
@@ -97,11 +102,13 @@ module shell() {
 module cover() {
     difference() {
         union() {
-            outer(COVER_T);
+            intersection() { body(); outer(COVER_T); }
+            // стойки к отверстиям платы: крышка, стойка и плата стягиваются одним винтом
+            for (h = HOLES) translate([h[0], h[1], COVER_T - 0.01]) cylinder(d = POST_D, h = Z_PCB - COVER_T + 0.01);
             // рамка аккумулятора
             translate([0, 0, COVER_T - 0.01]) difference() {
-                rrect([BAT_POS[0] - 1.2, BAT_POS[1] - 1.2], [BAT_POS[0] + BAT[0] + 1.2, BAT_POS[1] + BAT[1] + 1.2], 1.5, 2);
-                rrect([BAT_POS[0] - 0.2, BAT_POS[1] - 0.2], [BAT_POS[0] + BAT[0] + 0.2, BAT_POS[1] + BAT[1] + 0.2], 1, 3);
+                rrect([BAT_POS[0] - 1.4, BAT_POS[1] - 1.4], [BAT_POS[0] + BAT[0] + 1.4, BAT_POS[1] + BAT[1] + 1.4], 1.4, 2);
+                rrect([BAT_POS[0] - 0.4, BAT_POS[1] - 0.4], [BAT_POS[0] + BAT[0] + 0.4, BAT_POS[1] + BAT[1] + 0.4], 0.4, 3);
                 translate([BAT_POS[0] + BAT[0] - 2, BAT_POS[1] + 6, -1]) cube([4, BAT[1] - 12, 4]);   // выход проводов
             }
             // кольцо мотора
@@ -109,19 +116,19 @@ module cover() {
             // петли клипсы снаружи (сверху)
             for (x = HINGE_X) translate([x, 0, 0]) knuckle_cover();
         }
-        for (c = CORNERS) translate([c[0], c[1], -0.1]) { cylinder(d = SCREW_CLR, h = 5); cylinder(d = 3.6, h = 1.4); }
+        for (h = HOLES) translate([h[0], h[1], -0.1]) { cylinder(d = SCREW_CLR, h = Z_PCB + 1); cylinder(d = 4.0, h = 1.1); }
         translate([MOTOR[0] - 2, MOTOR[1] + MOTOR_D / 2 - 0.5, COVER_T]) cube([4, 3, 3]);   // провода мотора
     }
 }
 
 // ---------------------------------------------------------------- клипса: на ремень (сложена) / подставка (откинута на ~42°)
-CLIP_W = 34;  CLIP_L = 40;  CLIP_T = 2.6;  AXIS_Y = PCB[1] - 3;  AXIS_Z = -2.6;  BELT = 3.2;
+CLIP_W = 34;  CLIP_L = 38;  CLIP_T = 2.2;  AXIS_Y = PCB[1] - 3;  AXIS_Z = -2.2;  BELT = 3.0;  KR = 2.2;
 HINGE_X = [PCB[0] / 2 - CLIP_W / 2 - 0.2 - 5, PCB[0] / 2 + CLIP_W / 2 + 0.2];   // две петли по 5 мм
 module knuckle_cover() {
     difference() {
         hull() {
             translate([0, AXIS_Y - 4, 0]) cube([5, 8, 0.01]);
-            translate([0, AXIS_Y, AXIS_Z]) rotate([0, 90, 0]) cylinder(r = 2.4, h = 5);
+            translate([0, AXIS_Y, AXIS_Z]) rotate([0, 90, 0]) cylinder(r = KR, h = 5);
         }
         translate([-1, AXIS_Y, AXIS_Z]) rotate([0, 90, 0]) cylinder(d = SCREW_CLR, h = 7);
     }
@@ -130,17 +137,16 @@ module clip() {   // в сложенном положении, ось вдоль
     x0 = PCB[0] / 2 - CLIP_W / 2;
     difference() {
         union() {
-            translate([x0, AXIS_Y, AXIS_Z]) rotate([0, 90, 0]) cylinder(r = 2.4, h = CLIP_W);
+            translate([x0, AXIS_Y, AXIS_Z]) rotate([0, 90, 0]) cylinder(r = KR, h = CLIP_W);
             // упор: при откидывании на ~42° выступ ложится на крышку
             translate([x0 + 6, AXIS_Y, AXIS_Z - 1.2]) cube([CLIP_W - 12, 3.4, 2.4]);
             // пластина клипсы: зазор BELT до крышки под ремень
-            translate([x0, AXIS_Y - CLIP_L, AXIS_Z - BELT - CLIP_T + 2.4]) cube([CLIP_W, CLIP_L, CLIP_T]);
-            translate([x0, AXIS_Y - 3, AXIS_Z - BELT - CLIP_T + 2.4]) cube([CLIP_W, 3, BELT + CLIP_T - 2.4]);
+            translate([0, 0, AXIS_Z - BELT - CLIP_T + KR]) rrect([x0, AXIS_Y - CLIP_L], [x0 + CLIP_W, AXIS_Y], 3, CLIP_T);
+            translate([x0, AXIS_Y - 3, AXIS_Z - BELT - CLIP_T + KR]) cube([CLIP_W, 3, BELT + CLIP_T - KR]);
             // зацеп на конце: прижимает ремень
-            translate([x0, AXIS_Y - CLIP_L, AXIS_Z - BELT + 2.4 - 0.01]) cube([CLIP_W, 2.2, 1.6]);
+            translate([x0 + 3, AXIS_Y - CLIP_L + 0.6, AXIS_Z - BELT + KR - 0.01]) cube([CLIP_W - 6, 2.2, 1.6]);
         }
         translate([x0 - 1, AXIS_Y, AXIS_Z]) rotate([0, 90, 0]) cylinder(d = SCREW_CLR, h = CLIP_W + 2);
-        for (x = [x0 - 0.01, x0 + CLIP_W - 0.0]) ;
     }
 }
 
@@ -163,7 +169,7 @@ module plug_top() {  // ТПУ-пробка USB-C XIAO
     translate([0, 0, 1.79]) rrect([-4.5, -1.6], [4.5, 1.6], 1.0, 3.0);
 }
 module gasket() {    // плоская прокладка 0.8 мм (ТПУ 85A) по торцу оболочки
-    difference() { outer(0.8); inner(0.8); for (c = CORNERS) translate([c[0], c[1], -1]) cylinder(d = SCREW_CLR, h = 3); }
+    difference() { outer(0.8); inner(0.8); }
 }
 
 // ---------------------------------------------------------------- макеты для сборки и проверок
@@ -177,7 +183,7 @@ module pcba() {
     color("white") translate([SW_X - 4.5, 0.4, Z_TOP]) cube([9, 3.6, 1.4]);
     color("white") translate([SW_X - 1, -0.9, Z_TOP + 0.3]) cube([2, 1.4, 1.2]);
     color("black") translate([BTN[0] - 2.25, BTN[1] - 1.75, Z_TOP]) cube([4.5, 3.5, BTN_H]);
-    color("ivory") translate([56, 30, Z_PCB - 4.8]) cube([8, 6, 4.8]);    // JST-PH снизу
+    color("ivory") translate([54, 31, Z_PCB - 4.8]) cube([8, 6, 4.8]);    // JST-PH снизу
     color("lightblue") translate([BAT_POS[0], BAT_POS[1], Z_BAT]) cube(BAT);
     color("gray") translate([MOTOR[0], MOTOR[1], COVER_T]) cylinder(d = 10, h = 3);
 }
@@ -204,3 +210,5 @@ if (part == "back") assembly();
 if (part == "section_y") difference() { assembly(); translate([-50, WIN_C[1], -50]) cube(200); }
 // пересечения оболочки с макетом платы и деталями: должен получиться пустой объект
 if (part == "clash") intersection() { shell(); pcba(); }
+// крышка со стойками против аккумулятора, разъёма и мотора: тоже пусто
+if (part == "clash_cover") intersection() { cover(); pcba(); }
