@@ -186,7 +186,7 @@ class SensorCore {
     Config cfg_{};Features features_;Impulse impulse_;State state_=State::Fault;Calibration cal_=Calibration::None;Telemetry t_{};
     bool healthy_=false,wanted_=false,calibrated_=false,started_=false;
     bool attacking_=false,releasing_=false,motion_=false,over_=false,quiet_=false;
-    uint32_t stateAt_=0,attackAt_=0,releaseAt_=0,motionAt_=0,lastEventAt_=0,overAt_=0,quietAt_=0;
+    uint32_t stateAt_=0,attackAt_=0,releaseAt_=0,motionAt_=0,lastEventAt_=0,overAt_=0;
     Vec3 orientation_{},base_{};SteadyWindow window_;
     uint32_t calAt_=0,lastSuppressionTick_=0;
     void clearEvent(){motion_=attacking_=releasing_=false;t_.event=0;}
