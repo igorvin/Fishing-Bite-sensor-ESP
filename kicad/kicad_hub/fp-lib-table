@@ -1,0 +1,3 @@
+(fp_lib_table
+  (lib (name "hub")(type "KiCad")(uri "${KIPRJMOD}/hub.pretty")(options "")(descr "Hub footprints"))
+)

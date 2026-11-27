@@ -1,0 +1,18 @@
+** Drc report for /home/user/Fishing-Bite-sensor-ESP/kicad/kicad_hub/hub.kicad_pcb **
+** Created on 2026-11-25 22:46:33 **
+
+** Found 2 DRC violations **
+[silk_edge_clearance]: Silkscreen clipped by board edge
+    Rule: board setup constraints silk; Severity: warning
+    @(166.0000 mm, 140.0000 mm): Line on Edge.Cuts
+    @(160.1000 mm, 139.5300 mm): Line on F.Silkscreen
+[silk_edge_clearance]: Silkscreen clipped by board edge
+    Rule: board setup constraints silk; Severity: warning
+    @(166.0000 mm, 140.0000 mm): Line on Edge.Cuts
+    @(161.4000 mm, 140.8200 mm): Line on F.Silkscreen
+
+** Found 0 unconnected pads **
+
+** Found 0 Footprint errors **
+
+** End of Report **

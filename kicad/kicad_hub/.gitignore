@@ -1,0 +1,5 @@
+_route/
+*.kicad_prl
+__pycache__/
+*-backups/
+fp-info-cache
